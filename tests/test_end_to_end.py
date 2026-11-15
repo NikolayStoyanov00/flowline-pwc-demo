@@ -279,3 +279,52 @@ class TestMappingVariable:
         # Five months later, every customer is five months less recent.
         assert recencies[1] > recencies[0]
         assert recencies[1] - recencies[0] == 151
+
+
+class TestAgainstTheReferenceImplementation:
+    """Diff dbt's output against the row-by-row reference implementation.
+
+    This shares the converter's reading of the Informatica documentation but
+    none of its code, so a match shows the two implementations agree — not
+    that either matches a real PowerCenter run. See the README.
+    """
+
+    def test_every_table_matches_cell_for_cell(self, repo, built) -> None:
+        from pwc2dbt.compare import compare
+        from pwc2dbt.simulate import VariableOrder
+
+        connection, _ = built
+        database = Path(connection.execute("select current_database()").fetchone()[0])
+        comparison = compare(
+            repo,
+            SEEDS,
+            SEEDS.parent.parent / "dbt" / "jaffle_converted" / "jaffle_converted.duckdb",
+            variable_order=VariableOrder.DEFERRED,
+        )
+        differing = {
+            diff.name: dict(diff.mismatched) or diff.note
+            for diff in comparison.differing
+        }
+        assert differing == {}
+        assert len(comparison.matched) == 16
+
+    def test_the_literal_reading_would_disagree(self, repo, built) -> None:
+        """What the unresolved question costs, measured.
+
+        Taking the XML's variable order literally changes three tables, so the
+        choice is not cosmetic.
+        """
+        from pwc2dbt.compare import compare
+        from pwc2dbt.simulate import VariableOrder
+
+        comparison = compare(
+            repo,
+            SEEDS,
+            SEEDS.parent.parent / "dbt" / "jaffle_converted" / "jaffle_converted.duckdb",
+            variable_order=VariableOrder.DOCUMENT,
+        )
+        assert {diff.name for diff in comparison.differing} == {
+            "ORDERS",
+            "ORDER_FINANCIALS",
+            "STORE_DAILY_KPIS",
+        }

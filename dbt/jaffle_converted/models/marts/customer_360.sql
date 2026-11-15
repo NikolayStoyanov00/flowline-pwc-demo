@@ -4,7 +4,10 @@
 with
 
 stg_customers1 as (
-    select * from {{ ref('stg_customers') }}
+    select
+        cast(customer_id as varchar) as customer_id,
+        cast(customer_name as varchar) as customer_name
+    from {{ ref('stg_customers') }}
 ),
 
 un_order_bands as (

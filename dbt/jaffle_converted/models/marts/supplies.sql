@@ -4,7 +4,14 @@
 with
 
 stg_supplies as (
-    select * from {{ ref('stg_supplies') }}
+    select
+        cast(supply_id as varchar) as supply_id,
+        cast(supply_name as varchar) as supply_name,
+        cast(supply_cost_cents as double) as supply_cost_cents,
+        cast(supply_cost as double) as supply_cost,
+        cast(is_perishable as double) as is_perishable,
+        cast(product_id as varchar) as product_id
+    from {{ ref('stg_supplies') }}
 ),
 
 sq_stg_supplies as (

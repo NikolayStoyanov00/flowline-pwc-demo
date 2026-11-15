@@ -6,6 +6,7 @@
     python -m pwc2dbt plan        FLOWLINE_DEMO_JAFFLESHOP.xml
     python -m pwc2dbt expressions FLOWLINE_DEMO_JAFFLESHOP.xml
     python -m pwc2dbt convert     FLOWLINE_DEMO_JAFFLESHOP.xml --out dbt/jaffle_converted
+    python -m pwc2dbt compare     FLOWLINE_DEMO_JAFFLESHOP.xml
 """
 
 from __future__ import annotations
@@ -15,11 +16,13 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from .compare import CompareError, compare as compare_outputs
 from .emit import write_project
 from .expressions import ExpressionError, translate
 from .graph import ModelPlan, plan_models, split_points, unsupported_steps
 from .model import Kind, Repository, Transformation
 from .parse import ParseError, parse_file
+from .simulate import SimulationError, VariableOrder
 from .sql import SqlError
 
 
@@ -262,6 +265,42 @@ def _render_expressions(repo: Repository, origin_filter: str | None) -> str:
     return "\n".join(out)
 
 
+def _render_comparison(comparison) -> str:
+    out: list[str] = []
+    out.append(
+        f"matched {len(comparison.matched)} of {len(comparison.diffs)} tables"
+    )
+
+    for diff in comparison.diffs:
+        flag = "OK  " if diff.matches else "DIFF"
+        out.append(
+            f"  {flag} {diff.name:<28} reference={diff.simulated_rows:>6} "
+            f"dbt={diff.dbt_rows:>6}"
+            + (f"  key={diff.key}" if diff.key else "")
+        )
+        if diff.matches:
+            continue
+        if diff.note:
+            out.append(f"         {diff.note}")
+        if diff.missing_columns:
+            out.append(f"         columns missing from dbt: {', '.join(diff.missing_columns)}")
+        for column, count in sorted(diff.mismatched.items()):
+            out.append(f"         {column}: {count} cell(s) differ")
+        for key, column, left, right in diff.examples:
+            out.append(f"           {column} where key={key}: reference={left!r} dbt={right!r}")
+        if diff.only_simulated:
+            out.append(f"         only in reference: {diff.only_simulated}")
+        if diff.only_dbt:
+            out.append(f"         only in dbt: {diff.only_dbt}")
+
+    if comparison.notes:
+        out.append(_heading("notes from the reference run"))
+        for note in dict.fromkeys(comparison.notes):
+            out.append(f"  {note}")
+
+    return "\n".join(out)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pwc2dbt",
@@ -313,6 +352,35 @@ def build_parser() -> argparse.ArgumentParser:
         help="directory of seed CSVs to copy in (default: seeds/jaffle)",
     )
 
+    compare_cmd = subparsers.add_parser(
+        "compare",
+        help="run the mapping row by row and diff the result against dbt's",
+    )
+    compare_cmd.add_argument("xml", type=Path, help="path to the PowerCenter export XML")
+    compare_cmd.add_argument(
+        "--seeds",
+        type=Path,
+        default=Path("seeds/jaffle"),
+        help="directory of seed CSVs to run against (default: seeds/jaffle)",
+    )
+    compare_cmd.add_argument(
+        "--duckdb",
+        type=Path,
+        default=Path("dbt/jaffle_converted/jaffle_converted.duckdb"),
+        help="the database dbt built",
+    )
+    compare_cmd.add_argument(
+        "--variable-order",
+        choices=[VariableOrder.DEFERRED, VariableOrder.DOCUMENT],
+        default=VariableOrder.DEFERRED,
+        help=(
+            "how to read local variable evaluation order: 'deferred' treats a "
+            "remember-the-previous-row variable as holding the previous row "
+            "(the reading the converter uses); 'document' takes the XML order "
+            "literally"
+        ),
+    )
+
     return parser
 
 
@@ -347,6 +415,19 @@ def main(argv: list[str] | None = None) -> int:
         print("next:")
         print(f"  cd {result.out_dir}")
         print("  dbt build")
+    elif args.command == "compare":
+        try:
+            comparison = compare_outputs(
+                repo,
+                args.seeds,
+                args.duckdb,
+                variable_order=args.variable_order,
+            )
+        except (CompareError, SimulationError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(_render_comparison(comparison))
+        return 0 if not comparison.differing else 2
 
     return 0
 

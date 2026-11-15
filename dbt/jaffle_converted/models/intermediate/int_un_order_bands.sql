@@ -1,5 +1,6 @@
 -- Generated from PowerCenter mapping m_FL_JS_MARTS_ENRICHED
 -- shared step UN_ORDER_BANDS, built once and referenced by several models
+-- note: EXP_CUSTOMER_ORDER_NUM.v_PREV_CUSTOMER_ID held the previous row's value; translated as lag()
 -- note: EXP_CUSTOMER_ORDER_NUM.v_ORDER_SEQUENCE was a variable holding its own previous value; translated as row_number()
 
 with
@@ -10,7 +11,18 @@ srt_order_id as (
 ),
 
 stg_orders1 as (
-    select * from {{ ref('stg_orders') }}
+    select
+        cast(order_id as varchar) as order_id,
+        cast(customer_id as varchar) as customer_id,
+        cast(location_id as varchar) as location_id,
+        cast(ordered_at_day as timestamp) as ordered_at_day,
+        cast(subtotal_cents as double) as subtotal_cents,
+        cast(tax_paid_cents as double) as tax_paid_cents,
+        cast(order_total_cents as double) as order_total_cents,
+        cast(subtotal as double) as subtotal,
+        cast(tax_paid as double) as tax_paid,
+        cast(order_total as double) as order_total
+    from {{ ref('stg_orders') }}
 ),
 
 agg_items_by_order as (

@@ -36,7 +36,7 @@ dbt build
 `dbt build` seeds the sample data, builds all 18 models and runs 32 tests. It
 needs no warehouse: DuckDB writes to a local file.
 
-Run the test suite with `pytest` — **201 tests**, about 35 seconds.
+Run the test suite with `pytest` — **239 tests**, about 50 seconds.
 
 ### Looking at what it does
 
@@ -48,10 +48,48 @@ Four commands, each of which prints its reasoning rather than just doing the wor
 | `pwc2dbt plan <xml>` | the models it will produce and what feeds each one (`--verbose` for every step) |
 | `pwc2dbt expressions <xml>` | all 205 Informatica expressions next to their SQL |
 | `pwc2dbt convert <xml> --out <dir>` | writes the dbt project |
+| `pwc2dbt compare <xml>` | runs the mapping row by row and diffs the result against dbt's |
 
 `plan` and `expressions` exist because the interesting part of this problem is
 the decision-making, and those two make it inspectable without reading any
 Python.
+
+### Seeing the before and the after
+
+There is no way to run the PowerCenter side: it is licensed software needing a
+domain, a repository database and running services. So the "before" is a
+**reference implementation** of the documented Informatica semantics — Python
+that walks the same graph row by row and writes the same 16 tables — and
+`compare` diffs it against what dbt built:
+
+```bash
+cd dbt/jaffle_converted && dbt build && cd ../..
+python -m pwc2dbt compare FLOWLINE_DEMO_JAFFLESHOP.xml
+```
+
+```
+matched 16 of 16 tables
+  OK   CUSTOMERS                    reference=   168 dbt=   168  key=customer_id
+  OK   ORDERS                       reference=  2967 dbt=  2967  key=order_id
+  ...
+```
+
+**What that does and does not prove.** The reference implementation was written
+from the same reading of Informatica's documentation as the converter, so
+agreement shows the two implementations are **consistent**, not that either
+matches a real PowerCenter run. Nothing here has been tested against
+PowerCenter. It still earns its place: it shares no code with the converter and
+fails differently, the way an interpreter and a compiler do, and it found two
+real bugs (below).
+
+For the dbt side visually:
+
+```bash
+cd dbt/jaffle_converted
+dbt docs generate && dbt docs serve     # the lineage DAG, at localhost:8080
+```
+
+and to browse the data, `duckdb jaffle_converted.duckdb` or any SQL client.
 
 ---
 
@@ -87,6 +125,9 @@ One module per step of that pipeline:
 | `naming.py` | PowerCenter names → dbt names |
 | `sql.py` | steps → CTEs → one model |
 | `emit.py` | the dbt project: models, YAML, tests, seeds |
+| `evaluate.py` | the same expressions, *computed* rather than translated |
+| `simulate.py` | a reference implementation: the graph, run row by row |
+| `compare.py` | diffs the reference output against dbt's |
 
 `docs/concepts.md` explains the PowerCenter vocabulary in SQL terms. Worth
 reading first if "mapping", "instance" and "port" are unfamiliar.
@@ -179,7 +220,35 @@ it just quietly has the wrong rows. It is verified by
 [Informatica's own documentation][master-outer], asserted in `test_sql.py`, and
 checked against real data in `test_end_to_end.py`.
 
-### 2. `TRUNC` on a number
+### 2. The variable evaluation order, which is now measured
+
+The "remember the previous row" idiom only works if the comparison is evaluated
+*before* the assignment that updates the remembered value. In this export the
+assignment is declared **first**, and I cannot verify from the XML alone
+whether document order is evaluation order.
+
+So the converter commits to one reading — a remembered variable holds the
+**previous** row, translated as `lag(...) over (order by <sorter keys>)` — and
+the reference implementation can run **both**, which turns the open question
+into a number:
+
+| reading | effect |
+|---|---|
+| **deferred** (what the converter does) | matches dbt on all 16 tables |
+| **document** (the literal reading) | 3 tables differ: `ORDERS`, `ORDER_FINANCIALS`, `STORE_DAILY_KPIS` |
+
+Read literally, `CUSTOMER_ORDER_NUMBER` never restarts and climbs past 2,900,
+and `UNIQUE_CUSTOMERS` is **0 for every row**, because the first-customer test
+compares a row against itself. Those are dead columns, which is the evidence
+for choosing the other reading. Run it either way:
+
+```bash
+python -m pwc2dbt compare FLOWLINE_DEMO_JAFFLESHOP.xml --variable-order document
+```
+
+If a real PowerCenter run disagrees, this is the thing it will disagree about.
+
+### 3. `TRUNC` on a number
 
 Informatica uses one `TRUNC` for dates and for numbers, and the export does not
 record which is meant. Every use here is a date, so the date reading is taken
@@ -187,39 +256,53 @@ and `TRUNC(x)` becomes `date_trunc('day', x)`. On an export that truncates a
 *number*, this produces wrong numbers silently. A fix needs the port's datatype
 threaded into the translator.
 
-### 3. Local variables are inlined
+### 4. Local variables are inlined
 
 A variable used by several output ports is substituted into each of them, so
 its SQL appears more than once. Correct, but it makes wide expressions
 repetitive, and a deep chain would grow quickly. Emitting one CTE per variable
 level would avoid it.
 
-### 4. Interpreted rather than translated: the running counter
+### 5. Interpreted rather than translated: the row-by-row variables
 
-`v_ORDER_SEQUENCE` reads its own previous value, which no expression can do. It
-is a hand-rolled `row_number()`, and it is translated as one, with the
-partition key taken from its condition and the ordering from the nearest
-upstream Sorter. That is an interpretation of intent, not a mechanical
-translation — the only one in the converter, and it is noted in the generated
-SQL wherever it happens.
+Two constructs are interpreted rather than translated mechanically, because
+PowerCenter's variable ports keep state between rows and no SQL expression can:
 
-The matching is deliberately narrow: only the exact
-`IIF(v_PREV_KEY = KEY, v_COUNTER + 1, 1)` shape. Anything else raises.
+| PowerCenter | becomes | why |
+|---|---|---|
+| `v_SEQ = IIF(v_PREV_KEY = KEY, v_SEQ + 1, 1)` | `row_number() over (partition by KEY order by …)` | a counter reading its own previous value |
+| `v_PREV_KEY = KEY`, read by another variable | `lag(KEY) over (order by …)` | a slot holding the previous row |
 
-### 5. Precision and scale are discarded
+Both take their ordering from the nearest upstream Sorter, which is the one
+case where a Sorter is not droppable. Both are noted in the generated SQL
+wherever they happen, so a reader can see where interpretation occurred.
 
-Ports carry precision and scale; the generated SQL does not cast to them. DuckDB
-infers types. Against a real Oracle warehouse, a `number(12,2)` target fed by a
-computed `double` could round differently.
+The counter match is deliberately narrow: only the exact
+`IIF(v_PREV_KEY = KEY, v_COUNTER + 1, 1)` shape, and anything else raises. The
+`lag()` rule is narrow too — a variable that is only one port name *and* is
+read by another variable. A bare variable nobody else reads is just an alias
+and is left alone.
 
-### 6. The five enriched marts cannot be checked against anything
+These are the places most likely to diverge from a real PowerCenter run. See
+risk 2 for how much is at stake.
+
+### 6. Precision and scale
+
+Source columns *are* cast to their declared types now, which the reference
+implementation forced (see below). But port-level precision and scale further
+down the chain are still discarded: a `number(12,2)` target fed by a computed
+double is not rounded to two places. The session has
+`Enable high precision = NO`, so double is the faithful arithmetic, but the
+final rounding to the target's scale is missing.
+
+### 7. The five enriched marts cannot be checked against anything
 
 `CUSTOMER_360`, `ORDER_FINANCIALS`, `ORDER_ITEM_ENRICHED`,
 `PRODUCT_DAILY_PERFORMANCE` and `STORE_DAILY_KPIS` have no jaffle shop
 equivalent. They build and their row counts are internally consistent, but
 there is no reference output to compare against.
 
-### 7. One mapping variable, one default
+### 8. One mapping variable, one default
 
 `$$RUN_DATE` becomes `{{ var('run_date') }}` with the default taken from the
 export. It has to be emitted quoted and cast, because an unquoted
@@ -269,6 +352,15 @@ The downstream expression is
 no orders. It can never fire. That strongly suggests the mapping means
 `Detail Outer Join`, which is what the real jaffle shop `customers` model does.
 The same pattern drops 33 orders that have no items.
+
+### The seed data does not match the flag convention the mapping expects
+
+`IS_PERISHABLE` is `IIF(PERISHABLE = 'Y' OR PERISHABLE = '1', 1, 0)`, which
+expects an Oracle-style flag. dbt's jaffle shop seed data holds `True`/`False`,
+so with this data the flag is 0 for every supply and
+`HAS_PERISHABLE_SUPPLY` is 0 throughout. That is a mismatch between the sample
+data and the mapping, not a conversion error — against the Oracle source the
+mapping was written for, the column presumably holds `Y`/`N`.
 
 ### The previous-row variables are declared in the wrong order
 
@@ -353,12 +445,44 @@ a `srt_order_id` CTE that did not exist.
 **How it was caught:** `dbt build` — `Catalog Error: Table with name
 srt_order_id does not exist`.
 
+### 6. Source columns were left to the warehouse to type
+
+`RAW_SUPPLIES.PERISHABLE` is a `varchar2` tested with
+`IIF(PERISHABLE = 'Y' OR PERISHABLE = '1', 1, 0)`. The seed CSV holds
+`True`/`False`, DuckDB inferred the column as **boolean**, and then happily
+cast `'Y'` to `true` — so the comparison silently meant something else
+entirely, and `HAS_PERISHABLE_SUPPLY` came out 1 everywhere instead of 0.
+
+**How it was caught:** the reference implementation, which compares strings as
+the SOURCE definition says, disagreed on 4,528 cells. Both `dbt build` and the
+whole test suite were green.
+
+Generated models now cast every source column to the type the PowerCenter
+SOURCE declares, which is the general fix.
+
+### 7. The converter mixed two readings of variable order
+
+It used the intended reading for the self-referencing counter (translating it
+to `row_number()`) but the literal reading everywhere else — so
+`IS_FIRST_CUSTOMER` compiled to `location_id = location_id`, always true, and
+`UNIQUE_CUSTOMERS` was 0 on every row of `STORE_DAILY_KPIS`.
+
+**How it was caught:** the same comparison. Once the counter agreed, this was
+the only table left disagreeing. Remembered variables are now `lag()`, so one
+reading is used throughout.
+
 ### What this says about working with the agent
 
 The agent was good at structure and bad at being sure. Every one of these got
-through code that looked right and, in two cases, through a green test suite.
-What caught them was output: running the thing, printing what it decided, and
-executing the SQL rather than comparing it to a string.
+through code that looked right, and four of the seven got through a green test
+suite. What caught them was output: running the thing, printing what it
+decided, executing the SQL rather than comparing it to a string, and finally
+running the same mapping a second way and diffing.
+
+The last two are the most telling. `dbt build` passed, 201 tests passed, and
+two columns were still wrong — one silently inverted by a type the warehouse
+guessed, one constant at zero. Only a second independent implementation found
+them.
 
 ---
 
@@ -385,6 +509,12 @@ executing the SQL rather than comparing it to a string.
      and 5 above were all caught by that change.
 5. **Faithful over clever, throughout.** Every time the mapping looked wrong,
    the choice was to reproduce it and document it.
+6. **A second implementation, at the end.** Asked how to see the before and the
+   after, the honest answer was that PowerCenter cannot be run — so the
+   semantics were implemented a second time, row by row, and the two outputs
+   diffed. It found two bugs that a green `dbt build` and 201 passing tests had
+   both missed, and it turned the one unresolved semantic question into a
+   measurement.
 
 The full record is in `docs/agent-transcript/`:
 [`prompts.md`](docs/agent-transcript/prompts.md) is every instruction given, in
@@ -410,7 +540,7 @@ exchange. Email addresses and home paths are redacted.
 ```
 FLOWLINE_DEMO_JAFFLESHOP.xml   the input, unchanged
 src/pwc2dbt/                   the converter
-tests/                         201 tests
+tests/                         239 tests
 seeds/jaffle/                  sample data, a subset of dbt's jaffle shop seeds
 dbt/jaffle_converted/          generated output, committed as evidence
 docs/concepts.md               PowerCenter vocabulary in SQL terms

@@ -1,10 +1,19 @@
 -- Generated from PowerCenter mapping m_FL_JS_MARTS_ENRICHED
 -- target STORE_DAILY_KPIS (MART.STORE_DAILY_KPIS)
+-- note: EXP_MARK_FIRST_CUSTOMER.v_PREV_CUSTOMER held the previous row's value; translated as lag()
+-- note: EXP_MARK_FIRST_CUSTOMER.v_PREV_DAY held the previous row's value; translated as lag()
+-- note: EXP_MARK_FIRST_CUSTOMER.v_PREV_LOCATION held the previous row's value; translated as lag()
 
 with
 
 stg_locations1 as (
-    select * from {{ ref('stg_locations') }}
+    select
+        cast(location_id as varchar) as location_id,
+        cast(location_name as varchar) as location_name,
+        cast(opened_date as timestamp) as opened_date,
+        cast(tax_rate as double) as tax_rate,
+        cast(region as varchar) as region
+    from {{ ref('stg_locations') }}
 ),
 
 un_order_bands as (
@@ -66,7 +75,7 @@ exp_mark_first_customer as (
         order_cogs,
         order_gross_profit,
         order_value_band,
-        (case when (location_id) = location_id and (ordered_at_day) = ordered_at_day and (customer_id) = customer_id then 0 else 1 end) as is_first_customer
+        (case when lag(location_id) over (order by location_id, ordered_at_day, customer_id, order_id) = location_id and lag(ordered_at_day) over (order by location_id, ordered_at_day, customer_id, order_id) = ordered_at_day and lag(customer_id) over (order by location_id, ordered_at_day, customer_id, order_id) = customer_id then 0 else 1 end) as is_first_customer
     from srt_for_distinct_customer
 ),
 

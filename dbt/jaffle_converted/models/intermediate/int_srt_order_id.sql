@@ -4,27 +4,67 @@
 with
 
 stg_customers as (
-    select * from {{ ref('stg_customers') }}
+    select
+        cast(customer_id as varchar) as customer_id,
+        cast(customer_name as varchar) as customer_name
+    from {{ ref('stg_customers') }}
 ),
 
 stg_locations as (
-    select * from {{ ref('stg_locations') }}
+    select
+        cast(location_id as varchar) as location_id,
+        cast(location_name as varchar) as location_name,
+        cast(opened_date as timestamp) as opened_date,
+        cast(tax_rate as double) as tax_rate,
+        cast(region as varchar) as region
+    from {{ ref('stg_locations') }}
 ),
 
 stg_orders as (
-    select * from {{ ref('stg_orders') }}
+    select
+        cast(order_id as varchar) as order_id,
+        cast(customer_id as varchar) as customer_id,
+        cast(location_id as varchar) as location_id,
+        cast(ordered_at_day as timestamp) as ordered_at_day,
+        cast(subtotal_cents as double) as subtotal_cents,
+        cast(tax_paid_cents as double) as tax_paid_cents,
+        cast(order_total_cents as double) as order_total_cents,
+        cast(subtotal as double) as subtotal,
+        cast(tax_paid as double) as tax_paid,
+        cast(order_total as double) as order_total
+    from {{ ref('stg_orders') }}
 ),
 
 stg_order_items as (
-    select * from {{ ref('stg_order_items') }}
+    select
+        cast(order_item_id as varchar) as order_item_id,
+        cast(order_id as varchar) as order_id,
+        cast(product_id as varchar) as product_id
+    from {{ ref('stg_order_items') }}
 ),
 
 stg_products as (
-    select * from {{ ref('stg_products') }}
+    select
+        cast(product_id as varchar) as product_id,
+        cast(product_name as varchar) as product_name,
+        cast(product_type as varchar) as product_type,
+        cast(product_price_cents as double) as product_price_cents,
+        cast(product_price as double) as product_price,
+        cast(product_description as varchar) as product_description,
+        cast(is_food_item as double) as is_food_item,
+        cast(is_drink_item as double) as is_drink_item
+    from {{ ref('stg_products') }}
 ),
 
 stg_supplies as (
-    select * from {{ ref('stg_supplies') }}
+    select
+        cast(supply_id as varchar) as supply_id,
+        cast(supply_name as varchar) as supply_name,
+        cast(supply_cost_cents as double) as supply_cost_cents,
+        cast(supply_cost as double) as supply_cost,
+        cast(is_perishable as double) as is_perishable,
+        cast(product_id as varchar) as product_id
+    from {{ ref('stg_supplies') }}
 ),
 
 sq_stg_customers as (

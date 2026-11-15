@@ -4,7 +4,12 @@
 with
 
 raw_stores as (
-    select * from {{ source('raw', 'RAW_STORES') }}
+    select
+        cast(id as varchar) as id,
+        cast(name as varchar) as name,
+        cast(opened_at as timestamp) as opened_at,
+        cast(tax_rate as double) as tax_rate
+    from {{ source('raw', 'RAW_STORES') }}
 ),
 
 sq_raw_stores as (

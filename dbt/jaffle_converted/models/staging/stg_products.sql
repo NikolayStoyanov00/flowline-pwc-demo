@@ -4,7 +4,13 @@
 with
 
 raw_products as (
-    select * from {{ source('raw', 'RAW_PRODUCTS') }}
+    select
+        cast(sku as varchar) as sku,
+        cast(name as varchar) as name,
+        cast(type as varchar) as type,
+        cast(price as double) as price,
+        cast(description as varchar) as description
+    from {{ source('raw', 'RAW_PRODUCTS') }}
 ),
 
 sq_raw_products as (
