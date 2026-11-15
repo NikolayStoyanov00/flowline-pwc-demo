@@ -4,7 +4,7 @@ Every instruction given to Claude Code during this exercise, in order and
 verbatim. Slash commands, tool results and system messages are omitted.
 The agent's replies are in `conversation.md`.
 
-**10 prompts.** Email addresses and home directory paths are redacted.
+**12 prompts.** Email addresses and home directory paths are redacted.
 
 ---
 
@@ -218,4 +218,16 @@ i merged chunk 1, reviewing chunk 2 now, feel free to start working on chunk 3, 
 ```text
 how many chunks did we decide to split this into? im thinking of changing the strategy cuz reading the code for each chunk takes too much time and I just starts understanding the code and get piled on with new code to read which is overwhelming, I think what we should do instead is do the chunks we know need to be done - u do them.
 Then after u are done, we test everything, I read through the code, give you my suggestions on what to fix, you explain to me stuff I don't understand and voala, we should be good
+```
+
+## Prompt 11
+
+```text
+merge them all into main, I'll test after and do code review from main
+```
+
+## Prompt 12
+
+```text
+okay so good progress so far, but how can I test the before and after myself manually e2e, meaning - i want to see how powercenter was behaving with data and then how DBT is visualising and behaving with the data after it goes through the converter, do i need to install any apps or anything so I can check this?
 ```

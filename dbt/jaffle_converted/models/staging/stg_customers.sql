@@ -4,7 +4,10 @@
 with
 
 raw_customers as (
-    select * from {{ source('raw', 'RAW_CUSTOMERS') }}
+    select
+        cast(id as varchar) as id,
+        cast(name as varchar) as name
+    from {{ source('raw', 'RAW_CUSTOMERS') }}
 ),
 
 sq_raw_customers as (

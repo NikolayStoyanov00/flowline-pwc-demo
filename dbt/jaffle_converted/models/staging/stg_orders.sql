@@ -4,7 +4,15 @@
 with
 
 raw_orders as (
-    select * from {{ source('raw', 'RAW_ORDERS') }}
+    select
+        cast(id as varchar) as id,
+        cast(customer as varchar) as customer,
+        cast(ordered_at as timestamp) as ordered_at,
+        cast(store_id as varchar) as store_id,
+        cast(subtotal as double) as subtotal,
+        cast(tax_paid as double) as tax_paid,
+        cast(order_total as double) as order_total
+    from {{ source('raw', 'RAW_ORDERS') }}
 ),
 
 sq_raw_orders as (

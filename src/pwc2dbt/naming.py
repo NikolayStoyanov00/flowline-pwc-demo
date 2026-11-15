@@ -53,3 +53,28 @@ def layer_for_schema(schema: str | None) -> str:
 def source_name(schema: str) -> str:
     """Name of the dbt source group for a schema, e.g. ``RAW`` -> ``raw``."""
     return schema.strip().lower()
+
+
+_TEXT_TYPES = {"varchar2", "varchar", "char", "nchar", "nvarchar2", "string", "text"}
+_DATE_TYPES = {"date", "timestamp", "date/time", "datetime"}
+
+
+def sql_type(datatype: str) -> str:
+    """The SQL type a PowerCenter source column should be read as.
+
+    Source columns are cast explicitly rather than left to the warehouse,
+    because the mapping's behaviour depends on the declared type. The session
+    in this export has ``Enable high precision = NO``, which means PowerCenter
+    computes decimals as doubles, so numerics are read as ``double`` rather
+    than as a scaled decimal.
+    """
+    kind = (datatype or "").strip().lower()
+    if kind in _TEXT_TYPES:
+        return "varchar"
+    if kind in _DATE_TYPES:
+        return "timestamp"
+    if kind == "integer":
+        return "bigint"
+    if kind.startswith("number") or kind in {"decimal", "double", "real", "float"}:
+        return "double"
+    return "varchar"

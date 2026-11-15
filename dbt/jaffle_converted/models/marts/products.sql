@@ -4,7 +4,16 @@
 with
 
 stg_products as (
-    select * from {{ ref('stg_products') }}
+    select
+        cast(product_id as varchar) as product_id,
+        cast(product_name as varchar) as product_name,
+        cast(product_type as varchar) as product_type,
+        cast(product_price_cents as double) as product_price_cents,
+        cast(product_price as double) as product_price,
+        cast(product_description as varchar) as product_description,
+        cast(is_food_item as double) as is_food_item,
+        cast(is_drink_item as double) as is_drink_item
+    from {{ ref('stg_products') }}
 ),
 
 sq_stg_products as (

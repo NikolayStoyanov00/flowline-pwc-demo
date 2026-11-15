@@ -168,13 +168,16 @@ class TestRouterAndUnion:
 
 
 class TestSorters:
-    def test_sorters_do_not_emit_an_order_by(self, models) -> None:
+    def test_no_model_sorts_its_own_rows(self, models) -> None:
         """Row order does not survive into a table, so the sort is dropped.
-        Where it matters it is read off the Sorter by row_number() instead."""
+
+        Where the order matters it is read off the Sorter by a window
+        function, so `order by` is allowed inside `over (...)` and nowhere
+        else. Checked by removing every `over (...)` first.
+        """
+        window = re.compile(r"over \([^)]*\)")
         for name, sql in models.items():
-            assert "order by" not in sql.replace("over (partition by", "").replace(
-                "order by ordered_at_day, order_id", ""
-            ), name
+            assert "order by" not in window.sub("over ()", sql), name
 
     def test_dropping_a_sort_is_recorded(self, models) -> None:
         assert "sort order dropped" in models["stg_orders"]

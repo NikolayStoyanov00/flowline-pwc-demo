@@ -4,7 +4,11 @@
 with
 
 raw_items as (
-    select * from {{ source('raw', 'RAW_ITEMS') }}
+    select
+        cast(id as varchar) as id,
+        cast(order_id as varchar) as order_id,
+        cast(sku as varchar) as sku
+    from {{ source('raw', 'RAW_ITEMS') }}
 ),
 
 sq_raw_items as (

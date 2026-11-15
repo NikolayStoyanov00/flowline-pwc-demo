@@ -18,6 +18,7 @@ from typing import Callable, Iterable
 from .expressions import (
     Binary,
     Call,
+    Unary,
     ExpressionError,
     Number,
     Reference,
@@ -27,6 +28,7 @@ from .expressions import (
     translate,
 )
 from .graph import Graph, ModelPlan, Read, build_graph
+from .naming import sql_type
 from .model import Instance, Kind, Mapping, Port, Repository, Transformation
 
 __all__ = ["SqlError", "build_model_sql", "INDENT"]
@@ -156,14 +158,20 @@ class _ModelBuilder:
         appears more than once in the SQL.
         """
         resolved: dict[str, str] = {}
-        allow_stateful = bool(stateful_variable_ports(transformation.ports))
+        stateful = stateful_variable_ports(transformation.ports)
+        remembered = _remembered_ports(transformation)
         for port in order_variable_ports(
-            transformation.ports, allow_stateful=allow_stateful
+            transformation.ports, allow_stateful=bool(stateful)
         ):
             if not port.expression:
                 continue
-            if port in stateful_variable_ports(transformation.ports):
+            if port in stateful:
                 resolved[port.name] = self.row_number_sql(
+                    transformation, port, inputs, qualify
+                )
+                continue
+            if port.name in remembered:
+                resolved[port.name] = self.previous_row_sql(
                     transformation, port, inputs, qualify
                 )
                 continue
@@ -177,6 +185,42 @@ class _ModelBuilder:
         return resolved
 
     # -- stateful variables ----------------------------------------------
+    def previous_row_sql(
+        self,
+        transformation: Transformation,
+        port: Port,
+        inputs: dict[str, Column],
+        qualify: bool,
+    ) -> str:
+        """Translate a remember-the-previous-row variable into ``lag()``.
+
+        ``v_PREV_CUSTOMER_ID = CUSTOMER_ID`` is a slot holding the previous
+        row's value, which is how PowerCenter compares a row to the one
+        before it. The ordering comes from the upstream Sorter, which is what
+        makes "the previous row" mean anything.
+
+        This is the same reading as the row-counter translation. Taking the
+        declaration order literally instead would make the comparison test a
+        row against itself, and the columns built on it would be constant.
+        """
+        ordering = self.sort_order_for(transformation)
+        if not ordering:
+            raise SqlError(
+                f"{self.mapping.name}: {transformation.name}.{port.name} holds "
+                "the previous row's value, but nothing upstream establishes a "
+                "row order, so lag() has nothing to order by"
+            )
+        resolve = self.resolver(inputs, qualify=qualify)
+        value = translate(
+            port.expression, resolver=resolve, parameters=self.parameters
+        )
+        order_sql = ", ".join(resolve(key) for key in ordering)
+        self.notes.append(
+            f"{transformation.name}.{port.name} held the previous row's value; "
+            "translated as lag()"
+        )
+        return f"lag({value}) over (order by {order_sql})"
+
     def row_number_sql(
         self,
         transformation: Transformation,
@@ -289,7 +333,18 @@ class _ModelBuilder:
                 f"{self.mapping.name}: source instance {instance.name!r} has no table"
             )
         name = _cte_name(instance.name)
-        self.add_cte(name, f"{INDENT}select * from {read.reference}")
+
+        # Columns are cast to the type the PowerCenter SOURCE declares rather
+        # than left to whatever the warehouse infers, because the mapping's
+        # behaviour depends on the declared type. RAW_SUPPLIES.PERISHABLE is a
+        # varchar2 tested against 'Y'; read as a boolean instead, that
+        # comparison quietly means something else.
+        items = [
+            f"cast({column.name.lower()} as {sql_type(column.datatype)}) "
+            f"as {column.name.lower()}"
+            for column in read.table.columns
+        ]
+        self.add_cte(name, _select(items, read.reference))
         for column in read.table.columns:
             self.register(instance.name, column.name, Column(name, column.name.lower()))
 
@@ -670,6 +725,45 @@ class _ModelBuilder:
             + ",\n\n".join(blocks)
             + "\n\nselect * from final\n"
         )
+
+
+def _remembered_ports(transformation: Transformation) -> frozenset[str]:
+    """Variables that exist to hold the previous row's value.
+
+    A variable whose whole expression is one port name, and which another
+    variable reads. Without a reader it is only an alias, so it is left alone.
+    """
+    bare = {
+        port.name
+        for port in transformation.ports
+        if port.is_variable
+        and port.expression
+        and isinstance(parse_expression(port.expression), Reference)
+    }
+    if not bare:
+        return frozenset()
+
+    read_by_others: set[str] = set()
+    for port in transformation.ports:
+        if not (port.is_variable and port.expression) or port.name in bare:
+            continue
+        read_by_others |= _names_of(parse_expression(port.expression)) & bare
+    return frozenset(read_by_others)
+
+
+def _names_of(node) -> set[str]:
+    if isinstance(node, Reference):
+        return {node.name}
+    if isinstance(node, Unary):
+        return _names_of(node.operand)
+    if isinstance(node, Binary):
+        return _names_of(node.left) | _names_of(node.right)
+    if isinstance(node, Call):
+        names: set[str] = set()
+        for argument in node.arguments:
+            names |= _names_of(argument)
+        return names
+    return set()
 
 
 def _equalities(node) -> Iterable[tuple[object, object]]:

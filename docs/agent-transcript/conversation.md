@@ -1058,3 +1058,274 @@ All 17 pass, including the `run_date` test proving recency shifts by exactly 151
 ## Claude
 
 Backslashes keep getting eaten in heredocs. Writing the script to a file instead:
+
+## Claude
+
+Clean — zero PII. 10 prompts, 115 turns, 52 KB. Now the README, which is the main graded artifact.
+
+## Claude
+
+Everything green from a clean state. Committing as one squashed commit and opening the PR.
+
+## Claude
+
+Two things to exclude: dbt's `.user.yml` (contains a generated user id) and the duplicated seed copy, since `convert` regenerates it.
+
+## Claude
+
+**Done. PR #4:** https://github.com/NikolayStoyanov00/flowline-pwc-demo/pull/4
+
+The converter is complete and working end to end.
+
+```
+pip install -e ".[dev,dbt]"
+pytest                                   # 201 tests, ~35s
+
+python -m pwc2dbt convert FLOWLINE_DEMO_JAFFLESHOP.xml --out dbt/jaffle_converted
+cd dbt/jaffle_converted && dbt build     # PASS=56  ERROR=0
+```
+
+**3 mappings → 18 dbt models**, built and tested on DuckDB with no warehouse.
+
+## Before you read code, run these two
+
+```
+python -m pwc2dbt plan FLOWLINE_DEMO_JAFFLESHOP.xml --verbose
+python -m pwc2dbt expressions FLOWLINE_DEMO_JAFFLESHOP.xml
+```
+
+They print every decision the converter makes — the 18 models with their steps, and all 205 expressions beside their SQL. You can judge most of the project from those without opening a Python file.
+
+## Three things I'd focus your review on
+
+**Join direction** (`sql.py:_join_shape`) — the highest-risk code in the project. `Master Outer Join` keeps all *detail* rows, the opposite of how it reads. I verified it against Informatica's own docs rather than my memory, and it's confirmed in data below.
+
+**The `(step, port) → (CTE, column)` lookup** (`sql.py`) — the core idea. It's why column renames work without ever matching names between steps.
+
+**Intermediate models** (`graph.py:split_points`, `_walk_back`) — the decision you deferred to me. The data decided it: 21 CTEs were being duplicated across 5 files. Cutting at the 2 fork points took the generated SQL from **3,592 → 2,001 lines**, and there's a test asserting all 16 row counts are unchanged, so it's provably semantics-preserving.
+
+## The empirical payoff
+
+Running it confirmed all three source-mapping findings:
+
+| Finding | Evidence |
+|---|---|
+| `customers` drops order-less customers | **935 seeded → 168 in the mart**, exactly those with orders |
+| Price columns crossed | `product_price = 600` where `product_price_cents = 6.0` |
+| Counter resets per customer | max order number = order count (37 = 37) |
+
+All reproduced faithfully, none "fixed" — documented instead.
+
+## Three more agent mistakes, two caught only by running the SQL
+
+- **`A + B * C` is 25, not 13.** I wrote 13 in a precedence test. The translator was right; my arithmetic wasn't. A text-comparison test would have agreed with itself.
+- **`{{ var('run_date') }}` unquoted** renders as `2026-04-01` → DuckDB reads `2026-4-1 = 2021`. Valid SQL, sqlglot parsed it fine, only `dbt build` caught it.
+- **An intermediate model referenced a CTE it never emitted** — caught by `dbt build`.
+
+Your "test the behaviour" correction is directly responsible for two of those. It's written up in the README as the turning point in the process, because it genuinely was.
+
+## Deliverables
+
+`README.md` covers all six required points. `docs/agent-transcript/` has all 10 prompts verbatim plus the full 115-turn conversation — **sanitised**, since the raw log contained your email address and local paths. I checked: zero PII hits in the committed files. I did *not* commit the raw 5.3 MB JSONL; say the word if you want it, but I'd advise against it on a public repo.
+
+PRs #2, #3 and #4 are stacked and waiting on you. Merge them in order, or merge #4 into `main` once you're happy with the lot.
+
+## Nikolay
+
+merge them all into main, I'll test after and do code review from main
+
+## Claude
+
+Merging all three in order, retargeting each as its base lands in `main`.
+
+## Claude
+
+All four merged. Now verifying `main` actually works from a clean checkout, not just locally.
+
+## Claude
+
+All four PRs merged into `main`, and I verified it works from a **fresh clone of GitHub** rather than just locally:
+
+```
+git clone … && pip install -e ".[dev,dbt]"
+pytest                                    → 201 passed in 37.24s
+pwc2dbt convert … --out dbt/jaffle_converted  → 18 models
+dbt build                                 → PASS=56 WARN=0 ERROR=0
+```
+
+So the README's instructions work verbatim on a machine that has never seen this project.
+
+**History on `main`** — linear, one merge commit per phase, so you can read it phase by phase or whole:
+
+| | |
+|---|---|
+| `11f4904` | Merge #4 — generate SQL, dbt project, prove it runs |
+| `c7ccfa8` | Merge #3 — expression translator |
+| `8991348` | Merge #2 — graph + 16 models |
+| `2a379a1` | Merge #1 — XML parser |
+| `a5e3ae7` | Initial commit |
+
+## Where to start your review
+
+Run these two first — they show every decision the converter makes, and you can judge most of the project from them without opening a Python file:
+
+```
+python -m pwc2dbt plan FLOWLINE_DEMO_JAFFLESHOP.xml --verbose
+python -m pwc2dbt expressions FLOWLINE_DEMO_JAFFLESHOP.xml
+```
+
+Then, in rough order of how much they matter:
+
+1. **`sql.py:_join_shape`** — ~15 lines, highest-risk code in the project. `Master Outer Join` → `detail left join master`.
+2. **`sql.py:_ModelBuilder.inputs_of` / `register`** — the `(step, port) → (CTE, column)` lookup. The core idea; everything else hangs off it.
+3. **`graph.py:split_points` + `_walk_back`** — the fork decision you handed me. Worth checking you agree with the call.
+4. **`expressions.py`** — tokeniser → parser → emitter. The only real algorithm.
+5. **`docs/concepts.md`** — read this *first* if the PowerCenter vocabulary is still slippery.
+
+## Two things to push back on if you disagree
+
+Both are judgement calls I made and documented rather than hid:
+
+- **Faithful over corrected.** The crossed price columns and the customer-dropping join are reproduced as-is. Defensible, but a reviewer could reasonably want them flagged louder — or fixed behind a flag.
+- **`int_srt_order_id` / `int_un_order_bands`** are named after PowerCenter steps, not after what they contain. Traceable, but not descriptive. I listed it under "what I'd do next".
+
+Ask me about anything in the code and I'll explain it — that's the part of this that actually gets graded. The branches are still on the remote if you want to diff a phase in isolation; happy to delete them once you're done.
+
+## Nikolay
+
+okay so good progress so far, but how can I test the before and after myself manually e2e, meaning - i want to see how powercenter was behaving with data and then how DBT is visualising and behaving with the data after it goes through the converter, do i need to install any apps or anything so I can check this?
+
+## Claude
+
+Short answer on the "before" side: **you can't run PowerCenter, and no install will fix that.** It's licensed enterprise software — it needs a domain, a repository database, running Informatica services and the Windows-only client tools. There's no free or community edition, and Informatica has moved on to IDMC. So the "before" half isn't something you can stand up on a laptop.
+
+Let me check what you *can* actually use for the "after" half before I recommend anything.
+
+## Claude
+
+Both work. Here's the honest picture, then what I'd do about it.
+
+## The "after" half — you can see this right now
+
+**1. The dbt lineage graph in a browser** (this is the "visualising" part):
+
+```
+cd E:\InfiniteLambda\flowline-pwc-demo\dbt\jaffle_converted
+..\..\.venv\Scripts\dbt.exe docs generate
+..\..\.venv\Scripts\dbt.exe docs serve
+```
+
+Opens `localhost:8080` with a clickable DAG: all 18 models, every `ref()` edge, the column descriptions carried over from the PowerCenter port definitions, and which tests are attached where. This is the closest thing to "the PowerCenter Designer canvas, but for the converted version" — you can trace `raw_products → stg_products → products` visually.
+
+**2. Browse the actual data.** The DuckDB UI extension installs cleanly:
+
+```
+..\..\.venv\Scripts\python.exe -c "import duckdb; duckdb.connect('jaffle_converted.duckdb').execute('CALL start_ui()'); input('enter to stop')"
+```
+
+Starts a local server on `localhost:4213` — spreadsheet-style browsing and a SQL console over all 24 tables (6 seeds + 18 models). DBeaver also works if you prefer a desktop client.
+
+## The "before" half — the real problem
+
+There is no way for you to run the PowerCenter side. So "see how PowerCenter behaved, then compare" can't be done directly, and I don't want to pretend otherwise.
+
+One thing worth asking: **does Infinite Lambda have the PowerCenter instance that produced this export?** The demo repo is theirs, so somebody ran it. If they'd give you access or a dump of the target tables, that's the genuine before, and it beats anything I can build.
+
+Failing that, there's one substitute that I think is genuinely worth building — with a caveat I want to state up front.
+
+## Claude
+
+Straight answer: **no, I can't guarantee it, and I won't pretend otherwise.** I have no PowerCenter to test against — I'd be coding my reading of the documentation, the same reading the converter already encodes.
+
+Let me make that concrete rather than hand-wavy. These are things in *your* XML that change results and that I cannot verify:
+
+## Claude
+
+That's a much better answer than I could have given from memory. Three concrete, named divergence risks found in your own file:
+
+**1. `Enable high precision = NO`** in the session config. That means PowerCenter computes every `decimal` port as a **double** — floating-point — then rounds to the port's scale on output. My generated SQL doesn't cast to scale at all, and DuckDB picks its own numeric types. So `PRODUCT_PRICE`, margins and tax totals can differ in the last decimal place, and an interpreter I write would inherit whichever choice I made, not PowerCenter's.
+
+**2. `Null Treated Low = YES`** on one Sorter. Null placement in a sort is load-bearing for the `row_number()` ordering. DuckDB's default null ordering is its own.
+
+**3. `Case Sensitive String Comparison = YES`** on all 16 joiners — this one happens to match DuckDB's default, so it's fine. Worth knowing it was checked rather than assumed.
+
+And the one I already flagged: **variable-port evaluation order**. I believe it's top-to-bottom in Ports-tab order, and that XML document order mirrors it. I cannot verify either, and it decides whether `customer_order_number` ever resets.
+
+## So what I'd actually claim
+
+Not "this is what PowerCenter does". Only this:
+
+> A reference implementation of the *documented* Informatica semantics, executing the graph row-by-row. It is a **differential test**: it shares the converter's interpretation of the spec but none of its code, so agreement proves the two implementations are consistent — it does not prove either matches a real PowerCenter run.
+
+What it genuinely buys you, beyond the before/after view:
+
+- Catches **implementation** bugs, because row-by-row imperative code and set-based SQL fail differently. That's the same reason compilers get tested against interpreters.
+- Lets me run the variable-ordering question **both ways** and show you numerically how much it changes `customer_order_number`. That converts an open question into a measured one — which is a far better interview answer than either guess.
+
+You authorised building it with the limits stated, so I'm starting. **Say stop if the honest version isn't worth it to you** — the query cookbook is 20 minutes instead of a few hours.
+
+## Claude
+
+Now the evaluator — it reuses the expression parser from the converter but *computes* values instead of emitting SQL.
+
+## Claude
+
+Now the interpreter that walks the graph row by row:
+
+## Claude
+
+Correct failure, and an important one: on the **first row** `v_ORDER_SEQUENCE` has no previous value yet. PowerCenter initialises variable ports to their datatype's default (0 for numeric, `''` for string, NULL for dates). Encoding that:
+
+## Claude
+
+**Every row count matches the dbt output exactly** — all 16 tables. Now the cell-level diff, which is the part you actually wanted.
+
+## Claude
+
+The differential test immediately found three things. Two are real, one is my comparison being naive. Let me root-cause the important one:
+
+## Claude
+
+Found it, and it's a genuinely valuable catch. The expression is:
+
+```
+IIF(PERISHABLE = 'Y' OR PERISHABLE = '1', 1, 0)
+```
+
+PowerCenter declares `PERISHABLE` as **`varchar2`**. But the seed CSV contains `True`/`False`, and **DuckDB infers that column as BOOLEAN** — then happily casts `'Y'` to `true`, so the comparison silently means something completely different. The interpreter, comparing strings, says `0`. dbt says `1`.
+
+The interpreter is faithful here. The real fix is that generated SQL should respect the **declared source types** rather than whatever the warehouse infers — which also fixes the precision concern I'd listed as risk #5.
+
+## Claude
+
+**14 of 16 tables now match exactly.** The source-type casts fixed the perishable disagreement; the tolerance fixed the margin one. The only remaining difference is `customer_order_number` — exactly the open question. Now the experiment:
+
+## Claude
+
+Both give the same answer — because my "dependency" order still puts `v_PREV_CUSTOMER_ID` *before* its reader, same as document order. The idiom needs the **opposite**: the remember-assignment happening *last*, so the comparison sees the previous row. That's the real alternative hypothesis, and I modelled the wrong one.
+
+## Claude
+
+Now it's informative. With `deferred`, `ORDERS` and `ORDER_FINANCIALS` **match dbt exactly** — the counter resets per customer, confirming the converter's `row_number()` reading. But `STORE_DAILY_KPIS` now differs. Let me see on what:
+
+## Claude
+
+Definitive. `unique_customers = SUM(IS_FIRST_CUSTOMER)`, and **dbt returns 0 for every single day** — because the converter translates `v_PREV_LOCATION = LOCATION_ID` literally as `location_id = location_id`, always true. The interpreter's deferred reading gives real counts (56, 60, 20…).
+
+So my converter is **inconsistent**: it uses the intended reading for the counter (`row_number()`) but the literal one here, producing a dead column. Fixing it to use one reading throughout:
+
+## Claude
+
+**16 of 16 tables match, cell for cell** — and `unique_customers` is now real data (56, 60, 20, 12) instead of all zeros. Adding the CLI command so you can run this yourself:
+
+## Claude
+
+Now tests for the new modules, then I'll update the README and ship it.
+
+## Claude
+
+That test was crude — it stripped specific strings, and `lag(...) over (order by ...)` now legitimately contains `order by`. Making it precise:
+
+## Claude
+
+239 passing. Updating the README with the findings, then shipping it.

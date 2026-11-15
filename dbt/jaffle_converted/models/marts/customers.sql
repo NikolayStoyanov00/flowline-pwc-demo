@@ -4,11 +4,25 @@
 with
 
 stg_customers as (
-    select * from {{ ref('stg_customers') }}
+    select
+        cast(customer_id as varchar) as customer_id,
+        cast(customer_name as varchar) as customer_name
+    from {{ ref('stg_customers') }}
 ),
 
 stg_orders2 as (
-    select * from {{ ref('stg_orders') }}
+    select
+        cast(order_id as varchar) as order_id,
+        cast(customer_id as varchar) as customer_id,
+        cast(location_id as varchar) as location_id,
+        cast(ordered_at_day as timestamp) as ordered_at_day,
+        cast(subtotal_cents as double) as subtotal_cents,
+        cast(tax_paid_cents as double) as tax_paid_cents,
+        cast(order_total_cents as double) as order_total_cents,
+        cast(subtotal as double) as subtotal,
+        cast(tax_paid as double) as tax_paid,
+        cast(order_total as double) as order_total
+    from {{ ref('stg_orders') }}
 ),
 
 sq_stg_customers as (
