@@ -136,6 +136,40 @@ they become either a nested CTE or an inlined sub-expression. They are declared
 *after* the ports that use them and can reference each other, so they need a
 topological sort rather than being read in order.
 
+### Variables keep their value between rows
+
+This is the one place where the "a port is a column of a SELECT list" model
+breaks down. PowerCenter evaluates variable ports **once per row, top to
+bottom**, and a variable **keeps its value into the next row**. So a variable
+can read its own previous value:
+
+```
+v_PREV_CUSTOMER_ID = CUSTOMER_ID
+v_ORDER_SEQUENCE   = IIF(v_PREV_CUSTOMER_ID = CUSTOMER_ID, v_ORDER_SEQUENCE + 1, 1)
+```
+
+That is a running counter — `row_number()` written by hand, before windowing
+existed. No expression computes it, so it cannot be translated as one. It needs
+
+```sql
+row_number() over (partition by customer_id order by ...)
+```
+
+and the `order by` has to come from the **upstream Sorter**, which is why not
+every Sorter is droppable.
+
+Two consequences for the converter:
+
+- A self-referencing variable is detected and refused by default
+  (`order_variable_ports`), so it can never be quietly emitted as an ordinary
+  expression that runs and counts the wrong thing.
+- The declaration *order* carries meaning. The idiom only works when the
+  comparison is evaluated **before** the remember-the-previous-value
+  assignment. In this export the assignment is declared first, which — if XML
+  document order is the evaluation order, as PowerCenter's port order implies —
+  means the comparison sees the current row rather than the previous one. Worth
+  raising with whoever wrote the mapping; see the README.
+
 The `/MASTER` suffix is the only record of which side of a join is which, and
 it decides the join direction:
 

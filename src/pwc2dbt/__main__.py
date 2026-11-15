@@ -2,8 +2,9 @@
 
 ::
 
-    python -m pwc2dbt inspect FLOWLINE_DEMO_JAFFLESHOP.xml
-    python -m pwc2dbt plan    FLOWLINE_DEMO_JAFFLESHOP.xml
+    python -m pwc2dbt inspect     FLOWLINE_DEMO_JAFFLESHOP.xml
+    python -m pwc2dbt plan        FLOWLINE_DEMO_JAFFLESHOP.xml
+    python -m pwc2dbt expressions FLOWLINE_DEMO_JAFFLESHOP.xml
 """
 
 from __future__ import annotations
@@ -13,8 +14,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from .expressions import ExpressionError, translate
 from .graph import ModelPlan, plan_models, split_points, unsupported_steps
-from .model import Kind, Repository
+from .model import Kind, Repository, Transformation
 from .parse import ParseError, parse_file
 
 
@@ -167,6 +169,90 @@ def _render_plan(repo: Repository, verbose: bool) -> str:
     return "\n".join(out)
 
 
+def _expression_corpus(
+    repo: Repository,
+) -> list[tuple[str, str, str, str, str]]:
+    """Every Informatica expression in the export, with where it came from.
+
+    Expressions hide in four places, not just on ports.
+    """
+    corpus: list[tuple[str, str, str, str, str]] = []
+
+    def add(
+        mapping: str,
+        transformation: Transformation,
+        origin: str,
+        label: str,
+        text: str,
+        datatype: str = "",
+    ) -> None:
+        corpus.append((mapping, f"{transformation.name}.{label}", origin, text, datatype))
+
+    for mapping in repo.mappings:
+        for transformation in mapping.transformations.values():
+            for port in transformation.ports:
+                if port.expression and not port.is_passthrough:
+                    origin = "variable" if port.is_variable else "port"
+                    add(
+                        mapping.name,
+                        transformation,
+                        origin,
+                        port.name,
+                        port.expression,
+                        port.datatype,
+                    )
+            for group in transformation.groups:
+                if group.expression:
+                    add(mapping.name, transformation, "router group", group.name, group.expression)
+            for key, origin in (
+                ("Filter Condition", "filter"),
+                ("Join Condition", "join"),
+            ):
+                condition = transformation.attribute(key)
+                if condition:
+                    add(mapping.name, transformation, origin, key, condition)
+
+    return corpus
+
+
+def _render_expressions(repo: Repository, origin_filter: str | None) -> str:
+    out: list[str] = []
+    translated = 0
+    failed: list[tuple[str, str, str]] = []
+    by_origin: Counter[str] = Counter()
+
+    current_mapping = None
+    for mapping, label, origin, text, datatype in _expression_corpus(repo):
+        if origin_filter and origin != origin_filter:
+            continue
+        by_origin[origin] += 1
+
+        if mapping != current_mapping:
+            out.append(_heading(mapping))
+            current_mapping = mapping
+
+        out.append(f"\n  {label}   [{origin}{', ' + datatype if datatype else ''}]")
+        out.append(f"    pwc : {text}")
+        try:
+            sql = translate(text, result_datatype=datatype)
+        except ExpressionError as exc:
+            out.append(f"    FAIL: {exc}")
+            failed.append((mapping, label, str(exc)))
+        else:
+            out.append(f"    sql : {sql}")
+            translated += 1
+
+    out.append(_heading("totals"))
+    for origin, count in sorted(by_origin.items()):
+        out.append(f"  {origin:<14}: {count}")
+    out.append(f"  {'translated':<14}: {translated}")
+    out.append(f"  {'failed':<14}: {len(failed)}")
+    for mapping, label, message in failed:
+        out.append(f"      {mapping}.{label}: {message}")
+
+    return "\n".join(out)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="pwc2dbt",
@@ -190,6 +276,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="list every step of every model rather than a summary",
     )
 
+    expressions = subparsers.add_parser(
+        "expressions",
+        help="translate every Informatica expression in an export into SQL",
+    )
+    expressions.add_argument("xml", type=Path, help="path to the PowerCenter export XML")
+    expressions.add_argument(
+        "--only",
+        choices=["port", "variable", "router group", "filter", "join"],
+        help="show only expressions from one place",
+    )
+
     return parser
 
 
@@ -206,6 +303,8 @@ def main(argv: list[str] | None = None) -> int:
         print(_render_inspect(repo))
     elif args.command == "plan":
         print(_render_plan(repo, verbose=args.verbose))
+    elif args.command == "expressions":
+        print(_render_expressions(repo, args.only))
 
     return 0
 
