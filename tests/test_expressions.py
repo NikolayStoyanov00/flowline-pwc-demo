@@ -124,7 +124,7 @@ class TestRealExport:
         failures = []
         for label, text, datatype in all_expressions(repo):
             sql = translate(text, result_datatype=datatype)
-            probe = sql.replace("{{ var('run_date') }}", "current_date")
+            probe = sql.replace("'{{ var(\"run_date\") }}'", "current_date")
             try:
                 sqlglot.parse_one(f"select {probe}", dialect="duckdb")
             except sqlglot.ParseError as exc:
@@ -176,11 +176,12 @@ class TestRealExport:
                 "TO_DATE(TO_CHAR(ORDERED_AT, 'DD-MM-YY'), 'DD-MM-YY')",
                 "strptime(strftime(ordered_at, '%d-%m-%y'), '%d-%m-%y')",
             ),
-            # A mapping variable becomes a dbt var, and DATE_DIFF reverses.
+            # A mapping variable becomes a dbt var, quoted so it cannot be
+            # read as arithmetic, and DATE_DIFF reverses its operands.
             (
                 "DATE_DIFF(TRUNC($$RUN_DATE), TRUNC(LAST_ORDERED_AT), 'DD')",
                 "date_diff('day', date_trunc('day', last_ordered_at), "
-                "date_trunc('day', {{ var('run_date') }}))",
+                "date_trunc('day', '{{ var(\"run_date\") }}'))",
             ),
             # OR, and a disjunction inside a condition.
             (

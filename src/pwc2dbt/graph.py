@@ -137,25 +137,41 @@ class Read:
 
 @dataclass(frozen=True, slots=True)
 class ModelPlan:
-    """One dbt model: a target plus everything feeding it."""
+    """One dbt model: a leaf step plus everything feeding it.
+
+    The leaf is usually a target. It can also be a *fork* — a step feeding
+    several targets — which is promoted to its own intermediate model so the
+    chain above it is built once instead of being copied into every consumer.
+    """
 
     name: str
     layer: str
     schema: str
     mapping_name: str
-    target: Instance
-    table: Table
+    #: The target instance, or the fork step for an intermediate model.
+    leaf: Instance
+    #: The target table. None for an intermediate model, which has no table.
+    table: Table | None
     #: Every upstream instance, producers before consumers.
     steps: tuple[Instance, ...]
     reads: tuple[Read, ...]
+    #: Steps read as another model instead of being inlined:
+    #: instance name -> that model's name.
+    boundaries: MappingABC[str, str]
+    #: The column names this model outputs.
+    exposed: tuple[str, ...]
     #: Steps this model shares with another model in the same mapping.
-    shared_steps: tuple[str, ...]
+    shared_steps: tuple[str, ...] = ()
+
+    @property
+    def is_intermediate(self) -> bool:
+        return self.table is None
 
     @property
     def depends_on(self) -> tuple[str, ...]:
-        return tuple(
-            sorted({model_name(r.table.name) for r in self.reads if r.is_model})
-        )
+        refs = {model_name(r.table.name) for r in self.reads if r.is_model}
+        refs |= set(self.boundaries.values())
+        return tuple(sorted(refs))
 
     @property
     def path(self) -> str:
@@ -198,21 +214,137 @@ def _reads_for(
     return tuple(reads)
 
 
-def plan_models(repo: Repository) -> tuple[ModelPlan, ...]:
-    """Work out every dbt model this export produces, one per target."""
+def intermediate_name(instance_name: str) -> str:
+    """Model name for a fork promoted to its own model.
+
+    Named after the PowerCenter step so the generated model stays traceable
+    back to the mapping. A semantic name cannot be inferred from the export.
+    """
+    return f"int_{instance_name.lower()}"
+
+
+def _walk_back(
+    graph: Graph,
+    leaf: str,
+    cut_at: frozenset[str],
+    include_leaf: bool = False,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Collect the steps feeding ``leaf``, stopping at any step in ``cut_at``.
+
+    Returns the steps to inline and the cut points reached. A cut point is
+    included in the steps (it has to be read from somewhere) but its own
+    feeders are not, because they belong to the cut point's model.
+
+    ``include_leaf`` adds the leaf itself. An intermediate model needs it,
+    because the fork step's own logic belongs to that model. A target does
+    not: a target has no logic, only the column list of the final select.
+    """
+    steps: set[str] = set()
+    reached: set[str] = set()
+    queue = list(graph.feeders(leaf))
+    seen = set(queue)
+    if include_leaf:
+        steps.add(leaf)
+
+    while queue:
+        name = queue.pop()
+        steps.add(name)
+        if name in cut_at:
+            reached.add(name)
+            continue
+        for feeder in graph.feeders(name):
+            if feeder not in seen:
+                seen.add(feeder)
+                queue.append(feeder)
+
+    return frozenset(steps), frozenset(reached)
+
+
+def _output_ports(mapping: Mapping, instance: Instance) -> tuple[str, ...]:
+    """The column names a step exposes to whatever reads it."""
+    transformation = mapping.transformation(instance.definition_name)
+    if transformation is None:
+        return ()
+    names = [
+        port.name.lower()
+        for port in transformation.ports
+        if port.is_output and not port.is_variable
+    ]
+    return tuple(dict.fromkeys(names))
+
+
+def plan_models(repo: Repository, *, extract_forks: bool = True) -> tuple[ModelPlan, ...]:
+    """Work out every dbt model this export produces.
+
+    One model per target, plus one per fork when ``extract_forks`` is set. In
+    the enriched mapping the five targets share 33 upstream steps; without the
+    extra models each of those steps would be copied into up to five files.
+    """
     model_tables = _model_tables(repo)
     plans: list[ModelPlan] = []
 
     for mapping in repo.mappings:
         graph = build_graph(mapping)
+        forks = frozenset(split_points(mapping)) if extract_forks else frozenset()
 
-        # Which instances feed more than one target, and so would be duplicated
-        # if every model inlined its whole upstream chain.
         feeds: dict[str, set[str]] = defaultdict(set)
-        ancestry = {t.name: graph.ancestors(t.name) for t in mapping.target_instances}
-        for target_name, ancestors in ancestry.items():
-            for ancestor in ancestors:
-                feeds[ancestor].add(target_name)
+        for target in mapping.target_instances:
+            for ancestor in graph.ancestors(target.name):
+                feeds[ancestor].add(target.name)
+
+        def make(
+            leaf: Instance,
+            name: str,
+            layer: str,
+            schema: str,
+            table: Table | None,
+            exposed: tuple[str, ...],
+        ) -> ModelPlan:
+            # A fork is never a boundary for its own model.
+            step_names, cuts = _walk_back(
+                graph,
+                leaf.name,
+                forks - {leaf.name},
+                include_leaf=table is None,
+            )
+            if not step_names:
+                raise GraphError(
+                    f"{mapping.name}: {leaf.name!r} has nothing feeding it"
+                )
+            inlined = step_names - cuts
+            return ModelPlan(
+                name=name,
+                layer=layer,
+                schema=schema,
+                mapping_name=mapping.name,
+                leaf=leaf,
+                table=table,
+                steps=tuple(
+                    mapping.instances[n] for n in graph.topological_order(step_names)
+                ),
+                reads=_reads_for(mapping, repo, inlined, model_tables),
+                boundaries=MappingProxyType(
+                    {n: intermediate_name(n) for n in sorted(cuts)}
+                ),
+                exposed=exposed,
+                shared_steps=tuple(
+                    sorted(n for n in step_names if len(feeds[n]) > 1)
+                ),
+            )
+
+        # Intermediate models first, so they exist before anything refs them.
+        for fork_name in sorted(forks):
+            fork = mapping.instances[fork_name]
+            plans.append(
+                make(
+                    leaf=fork,
+                    name=intermediate_name(fork_name),
+                    layer="intermediate",
+                    schema="",
+                    table=None,
+                    exposed=_output_ports(mapping, fork),
+                )
+            )
 
         for target in mapping.target_instances:
             table = repo.targets.get(target.definition_name)
@@ -221,30 +353,15 @@ def plan_models(repo: Repository) -> tuple[ModelPlan, ...]:
                     f"{mapping.name}: target instance {target.name!r} writes "
                     f"unknown table {target.definition_name!r}"
                 )
-
-            step_names = ancestry[target.name]
-            if not step_names:
-                raise GraphError(
-                    f"{mapping.name}: target {target.name!r} has nothing feeding it"
-                )
-
             schema = schema_from_pre_sql(target.attributes.get("Pre SQL", "")) or ""
             plans.append(
-                ModelPlan(
+                make(
+                    leaf=target,
                     name=model_name(table.name),
                     layer=layer_for_schema(schema),
                     schema=schema,
-                    mapping_name=mapping.name,
-                    target=target,
                     table=table,
-                    steps=tuple(
-                        mapping.instances[n]
-                        for n in graph.topological_order(step_names)
-                    ),
-                    reads=_reads_for(mapping, repo, step_names, model_tables),
-                    shared_steps=tuple(
-                        sorted(n for n in step_names if len(feeds[n]) > 1)
-                    ),
+                    exposed=tuple(c.name.lower() for c in table.columns),
                 )
             )
 

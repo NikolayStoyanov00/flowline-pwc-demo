@@ -1,0 +1,9 @@
+# Committed deliberately so the project runs with no setup. DuckDB writes to a
+# local file, so no warehouse credentials exist to leak.
+jaffle_converted:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: 'jaffle_converted.duckdb'
+      threads: 4

@@ -5,6 +5,7 @@
     python -m pwc2dbt inspect     FLOWLINE_DEMO_JAFFLESHOP.xml
     python -m pwc2dbt plan        FLOWLINE_DEMO_JAFFLESHOP.xml
     python -m pwc2dbt expressions FLOWLINE_DEMO_JAFFLESHOP.xml
+    python -m pwc2dbt convert     FLOWLINE_DEMO_JAFFLESHOP.xml --out dbt/jaffle_converted
 """
 
 from __future__ import annotations
@@ -14,10 +15,12 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from .emit import write_project
 from .expressions import ExpressionError, translate
 from .graph import ModelPlan, plan_models, split_points, unsupported_steps
 from .model import Kind, Repository, Transformation
 from .parse import ParseError, parse_file
+from .sql import SqlError
 
 
 def _heading(text: str) -> str:
@@ -121,7 +124,8 @@ def _render_plan(repo: Repository, verbose: bool) -> str:
         )
         for plan in mapping_plans:
             out.append(f"\n  {plan.path}")
-            out.append(f"    target   : {plan.target.name} ({plan.schema})")
+            label = "shared" if plan.is_intermediate else "target"
+            out.append(f"    {label:<9}: {plan.leaf.name} ({plan.schema or '-'})")
             out.append(f"    reads    : {len(plan.reads)} table read(s)")
             for read in plan.reads:
                 # The instance name is shown because one table is often read
@@ -134,6 +138,11 @@ def _render_plan(repo: Repository, verbose: bool) -> str:
                 out.append(f"      {kind} {read.table.name}{alias}")
             if plan.depends_on:
                 out.append(f"    ref()    : {', '.join(plan.depends_on)}")
+            if plan.boundaries:
+                out.append(
+                    f"    reuses   : "
+                    + ", ".join(f"{k} -> {v}" for k, v in plan.boundaries.items())
+                )
             out.extend(_render_chain(plan, verbose))
 
             blocked = unsupported_steps(plan)
@@ -287,6 +296,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="show only expressions from one place",
     )
 
+    convert = subparsers.add_parser(
+        "convert", help="write a runnable dbt project from an export"
+    )
+    convert.add_argument("xml", type=Path, help="path to the PowerCenter export XML")
+    convert.add_argument(
+        "--out",
+        type=Path,
+        required=True,
+        help="directory to write the dbt project into",
+    )
+    convert.add_argument(
+        "--seeds",
+        type=Path,
+        default=Path("seeds/jaffle"),
+        help="directory of seed CSVs to copy in (default: seeds/jaffle)",
+    )
+
     return parser
 
 
@@ -305,6 +331,22 @@ def main(argv: list[str] | None = None) -> int:
         print(_render_plan(repo, verbose=args.verbose))
     elif args.command == "expressions":
         print(_render_expressions(repo, args.only))
+    elif args.command == "convert":
+        seeds = args.seeds if args.seeds and args.seeds.is_dir() else None
+        try:
+            result = write_project(repo, args.out, seeds)
+        except SqlError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(f"wrote {len(result.files)} file(s) to {result.out_dir}")
+        print(f"  models : {len(result.models)}")
+        print(f"  tests  : {result.tests}")
+        if seeds is None:
+            print(f"  seeds  : none copied ({args.seeds} not found)")
+        print()
+        print("next:")
+        print(f"  cd {result.out_dir}")
+        print("  dbt build")
 
     return 0
 

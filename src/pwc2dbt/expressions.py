@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Callable, Iterable, Sequence
+from typing import Callable, Iterable, Mapping as MappingABC, Sequence
 
 from .model import Port
 
@@ -430,10 +430,38 @@ def _precedence(node: Node) -> int:
     return _ATOM
 
 
+#: PowerCenter datatypes that must reach SQL as a timestamp, not a bare value.
+_DATE_TYPES = {"date/time", "date", "timestamp"}
+_STRING_TYPES = {"string", "nstring", "text"}
+
+
 class _Emitter:
-    def __init__(self, resolver: Resolver, result_datatype: str) -> None:
+    def __init__(
+        self,
+        resolver: Resolver,
+        result_datatype: str,
+        parameters: MappingABC[str, str] | None = None,
+    ) -> None:
         self.resolve = resolver
         self.result_datatype = (result_datatype or "").lower()
+        self.parameters = parameters or {}
+
+    def emit_parameter(self, node: Parameter) -> str:
+        """A ``$$`` variable becomes a dbt ``var()``.
+
+        The quoting matters. ``{{ var('run_date') }}`` on its own renders to a
+        bare ``2026-04-01``, which SQL reads as the arithmetic 2026 - 4 - 1.
+        A date variable therefore has to be quoted and cast.
+        """
+        jinja = '{{ var("' + node.name.lstrip("$").lower() + '") }}'
+        datatype = (self.parameters.get(node.name) or "").lower()
+        if datatype in _DATE_TYPES:
+            return f"cast('{jinja}' as timestamp)"
+        if datatype and datatype not in _STRING_TYPES:
+            return jinja
+        # Strings, and anything undeclared: a quoted literal is the safe
+        # reading, since an unquoted one can parse as something else entirely.
+        return f"'{jinja}'"
 
     # -- dispatch ---------------------------------------------------------
     def emit(self, node: Node, minimum: int = 0) -> str:
@@ -451,8 +479,7 @@ class _Emitter:
         if isinstance(node, Reference):
             return self.resolve(node.name)
         if isinstance(node, Parameter):
-            # $$RUN_DATE becomes a dbt var, so it can be overridden per run.
-            return "{{ var('" + node.name.lstrip("$").lower() + "') }}"
+            return self.emit_parameter(node)
         if isinstance(node, Star):
             return "*"
         if isinstance(node, Unary):
@@ -637,6 +664,7 @@ def translate(
     *,
     resolver: Resolver | None = None,
     result_datatype: str = "",
+    parameters: MappingABC[str, str] | None = None,
 ) -> str:
     """Translate one Informatica expression into SQL.
 
@@ -645,7 +673,8 @@ def translate(
     default.
     """
     tree = parse_expression(expression)
-    return _Emitter(resolver or _default_resolver, result_datatype).emit(tree)
+    emitter = _Emitter(resolver or _default_resolver, result_datatype, parameters)
+    return emitter.emit(tree)
 
 
 # ---------------------------------------------------------------------------

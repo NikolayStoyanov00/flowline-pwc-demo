@@ -1,0 +1,28 @@
+version: 2
+
+models:
+  - name: product_daily_performance
+    description: >
+      Converted from PowerCenter mapping m_FL_JS_MARTS_ENRICHED,
+      target MART.PRODUCT_DAILY_PERFORMANCE.
+    columns:
+      - name: product_id
+        description: "varchar2(50,0) in PowerCenter"
+      - name: product_name
+        description: "varchar2(100,0) in PowerCenter"
+      - name: product_type
+        description: "varchar2(50,0) in PowerCenter"
+      - name: ordered_at_day
+        description: "date(19,0) in PowerCenter"
+      - name: units_sold
+        description: "number(15,0) in PowerCenter"
+      - name: revenue
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: cogs
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: gross_profit
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: margin_pct
+        description: "number(p,s)(10,4) in PowerCenter"
+      - name: perishable_sales_flag
+        description: "number(p,s)(1,0) in PowerCenter"

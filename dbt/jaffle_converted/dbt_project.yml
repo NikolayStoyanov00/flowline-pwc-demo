@@ -1,0 +1,25 @@
+name: 'jaffle_converted'
+version: '1.0.0'
+config-version: 2
+
+profile: 'jaffle_converted'
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+macro-paths: ["macros"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+# Every PowerCenter target was loaded with truncate-and-insert, so a table is
+# the faithful materialization. Staging stays a view, per dbt convention.
+models:
+  jaffle_converted:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table
+
+# PowerCenter mapping variables. Override per run, e.g.
+#   dbt build --vars '{"run_date": "2026-01-01"}'
+vars:
+  run_date: '2025-12-31'
