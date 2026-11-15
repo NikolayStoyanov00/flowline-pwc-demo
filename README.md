@@ -15,9 +15,12 @@ expression and test is derived from the XML.
 
 ---
 
-## How to run it
+## Quickstart
 
-Needs Python 3.12+.
+Needs Python 3.12+ and about two minutes. No warehouse, no accounts, no Docker —
+DuckDB writes to a local file.
+
+### 1. Install
 
 ```bash
 python -m venv .venv
@@ -25,7 +28,7 @@ python -m venv .venv
 pip install -e ".[dev,dbt]"
 ```
 
-Convert the export and build the result:
+### 2. Convert the export and build the result
 
 ```bash
 python -m pwc2dbt convert FLOWLINE_DEMO_JAFFLESHOP.xml --out dbt/jaffle_converted
@@ -33,14 +36,77 @@ cd dbt/jaffle_converted
 dbt build
 ```
 
-`dbt build` seeds the sample data, builds all 18 models and runs 32 tests. It
-needs no warehouse: DuckDB writes to a local file.
+Seeds the sample data, builds all 18 models, runs 32 tests. Expect
+`PASS=56 ERROR=0`.
 
-Run the test suite with `pytest` — **239 tests**, about 50 seconds.
+### 3. See the lineage, in a browser
 
-### Looking at what it does
+```bash
+dbt docs generate
+dbt docs serve                         # http://localhost:8080
+```
 
-Four commands, each of which prints its reasoning rather than just doing the work:
+A clickable DAG of all 18 models with every `ref()` edge, plus the column
+descriptions carried over from the PowerCenter port definitions and the tests
+attached to each one. This is the closest thing to the PowerCenter Designer
+canvas for the converted version: click `products` and walk back through
+`stg_products` to `raw_products`.
+
+### 4. Browse the data, in a browser
+
+```bash
+cd ../..
+python scripts/browse.py                # http://localhost:4213
+```
+
+Spreadsheet-style browsing and a SQL console over all 24 tables: the 6 seeded
+source tables and the 18 generated models, side by side. Ctrl-C to stop.
+
+Useful first queries, once it is open:
+
+```sql
+-- the crossed price columns: PRODUCT_PRICE holds cents, and vice versa
+select product_id, product_price, product_price_cents from stg_products;
+
+-- 935 customers seeded, 168 in the mart: the master outer join drops the rest
+select (select count(*) from stg_customers) as staged,
+       (select count(*) from customers)     as in_mart;
+
+-- the hand-rolled counter, now a window function, restarting per customer
+select customer_id, customer_order_number, ordered_at_day
+from orders order by customer_id, customer_order_number limit 20;
+```
+
+Any SQL client works too — the file is
+`dbt/jaffle_converted/jaffle_converted.duckdb`.
+
+### 5. Diff the output against a row-by-row reference run
+
+```bash
+python -m pwc2dbt compare FLOWLINE_DEMO_JAFFLESHOP.xml
+```
+
+```
+matched 16 of 16 tables
+```
+
+PowerCenter itself cannot be run, so this compares against a second
+implementation of the documented semantics rather than against PowerCenter.
+[What that does and does not prove](#seeing-the-before-and-the-after) is worth
+reading before relying on it.
+
+### 6. Run the tests
+
+```bash
+pytest                                 # 239 tests, about 50 seconds
+```
+
+---
+
+## Looking at what it decided
+
+Five commands. Three of them print the converter's reasoning rather than
+just doing the work, which is the quickest way to judge it:
 
 | Command | What it shows |
 |---|---|
@@ -54,23 +120,20 @@ Four commands, each of which prints its reasoning rather than just doing the wor
 the decision-making, and those two make it inspectable without reading any
 Python.
 
-### Seeing the before and the after
+## Seeing the before and the after
 
 There is no way to run the PowerCenter side: it is licensed software needing a
-domain, a repository database and running services. So the "before" is a
-**reference implementation** of the documented Informatica semantics — Python
-that walks the same graph row by row and writes the same 16 tables — and
-`compare` diffs it against what dbt built:
-
-```bash
-cd dbt/jaffle_converted && dbt build && cd ../..
-python -m pwc2dbt compare FLOWLINE_DEMO_JAFFLESHOP.xml
-```
+domain, a repository database and running services, and there is no free
+edition. So the "before" is a **reference implementation** of the documented
+Informatica semantics — Python that walks the same graph row by row, keeping
+variable state between rows, and writes the same 16 tables. `compare` diffs it
+against what dbt built:
 
 ```
 matched 16 of 16 tables
   OK   CUSTOMERS                    reference=   168 dbt=   168  key=customer_id
   OK   ORDERS                       reference=  2967 dbt=  2967  key=order_id
+  OK   STORE_DAILY_KPIS             reference=    58 dbt=    58  key=ordered_at_day
   ...
 ```
 
@@ -82,14 +145,8 @@ PowerCenter. It still earns its place: it shares no code with the converter and
 fails differently, the way an interpreter and a compiler do, and it found two
 real bugs (below).
 
-For the dbt side visually:
-
-```bash
-cd dbt/jaffle_converted
-dbt docs generate && dbt docs serve     # the lineage DAG, at localhost:8080
-```
-
-and to browse the data, `duckdb jaffle_converted.duckdb` or any SQL client.
+Three things in this export cannot be checked this way at all, and are listed
+under [where the converter is most likely wrong](#where-the-converter-is-most-likely-to-produce-wrong-output).
 
 ---
 
