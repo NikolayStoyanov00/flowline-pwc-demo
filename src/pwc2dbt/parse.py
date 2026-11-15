@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from types import MappingProxyType
+from typing import Mapping as MappingABC
 from xml.etree import ElementTree
 
 from .model import (
@@ -186,11 +187,26 @@ def _parse_transformation(element: ElementTree.Element) -> Transformation:
 # ---------------------------------------------------------------------------
 
 
-def _parse_instance(element: ElementTree.Element) -> Instance:
+def _parse_instance(
+    element: ElementTree.Element,
+    definitions: MappingABC[str, Transformation],
+) -> Instance:
+    definition_name = _text(element, "TRANSFORMATION_NAME") or _text(element, "NAME")
+
+    # An INSTANCE records TRANSFORMATION_TYPE but not TEMPLATENAME, so a Union
+    # looks like an unrecognised custom transformation here. Take the kind from
+    # the definition, which has both.
+    definition = definitions.get(definition_name)
+    kind = (
+        definition.kind
+        if definition is not None
+        else Kind.classify(_text(element, "TRANSFORMATION_TYPE"))
+    )
+
     return Instance(
         name=_text(element, "NAME"),
-        definition_name=_text(element, "TRANSFORMATION_NAME") or _text(element, "NAME"),
-        kind=Kind.classify(_text(element, "TRANSFORMATION_TYPE")),
+        definition_name=definition_name,
+        kind=kind,
         instance_type=_text(element, "TYPE", "TRANSFORMATION"),
         connection_name=_text(element, "DBDNAME"),
         associated_sources=tuple(
@@ -219,7 +235,7 @@ def _parse_mapping(element: ElementTree.Element) -> Mapping:
 
     instances = {}
     for inst_el in element.findall("INSTANCE"):
-        instance = _parse_instance(inst_el)
+        instance = _parse_instance(inst_el, transformations)
         instances[instance.name] = instance
 
     load_order = {

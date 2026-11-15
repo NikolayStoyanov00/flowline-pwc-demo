@@ -16,6 +16,22 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEMO_XML = PROJECT_ROOT / "FLOWLINE_DEMO_JAFFLESHOP.xml"
 
 
+def wrap_folder(body: str) -> str:
+    """Wrap XML fragments in the POWERMART/REPOSITORY/FOLDER envelope."""
+    return (
+        '<POWERMART CREATION_DATE="01/01/2026 00:00:00" REPOSITORY_VERSION="187.96">'
+        '<REPOSITORY NAME="REPO_Test" VERSION="187" CODEPAGE="MS1252" DATABASETYPE="Oracle">'
+        '<FOLDER NAME="FOLDER_Test">'
+        f"{body}"
+        "</FOLDER></REPOSITORY></POWERMART>"
+    )
+
+
+@pytest.fixture
+def wrap():
+    return wrap_folder
+
+
 @pytest.fixture(scope="session")
 def demo_xml_path() -> Path:
     if not DEMO_XML.is_file():
