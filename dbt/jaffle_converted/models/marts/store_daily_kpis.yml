@@ -1,0 +1,38 @@
+version: 2
+
+models:
+  - name: store_daily_kpis
+    description: >
+      Converted from PowerCenter mapping m_FL_JS_MARTS_ENRICHED,
+      target MART.STORE_DAILY_KPIS.
+    columns:
+      - name: location_id
+        description: "varchar2(100,0) in PowerCenter"
+      - name: location_name
+        description: "varchar2(100,0) in PowerCenter"
+      - name: region
+        description: "varchar2(10,0) in PowerCenter"
+      - name: ordered_at_day
+        description: "date(19,0) in PowerCenter"
+      - name: orders_count
+        description: "number(15,0) in PowerCenter"
+      - name: unique_customers
+        description: "number(15,0) in PowerCenter"
+      - name: revenue_total
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: subtotal_total
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: tax_total
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: cogs_total
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: gross_profit_total
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: gross_margin_pct
+        description: "number(p,s)(10,4) in PowerCenter"
+      - name: avg_order_value
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: high_value_orders
+        description: "number(15,0) in PowerCenter"
+      - name: high_value_orders_pct
+        description: "number(p,s)(10,4) in PowerCenter"

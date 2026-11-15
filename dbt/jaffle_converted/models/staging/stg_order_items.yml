@@ -1,0 +1,17 @@
+version: 2
+
+models:
+  - name: stg_order_items
+    description: >
+      Converted from PowerCenter mapping m_FL_JS_STAGING_FULL,
+      target STG.STG_ORDER_ITEMS.
+    columns:
+      - name: order_item_id
+        description: "varchar2(100,0) in PowerCenter"
+        data_tests:
+          - unique
+          - not_null
+      - name: order_id
+        description: "varchar2(100,0) in PowerCenter"
+      - name: product_id
+        description: "varchar2(50,0) in PowerCenter"

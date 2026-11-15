@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: customer_360
+    description: >
+      Converted from PowerCenter mapping m_FL_JS_MARTS_ENRICHED,
+      target MART.CUSTOMER_360.
+    columns:
+      - name: customer_id
+        description: "varchar2(100,0) in PowerCenter"
+      - name: customer_name
+        description: "varchar2(200,0) in PowerCenter"
+      - name: count_lifetime_orders
+        description: "number(15,0) in PowerCenter"
+      - name: first_ordered_at
+        description: "date(19,0) in PowerCenter"
+      - name: last_ordered_at
+        description: "date(19,0) in PowerCenter"
+      - name: lifetime_spend_pretax
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: lifetime_tax_paid
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: lifetime_spend
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: lifetime_cogs
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: lifetime_gross_profit
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: avg_order_value
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: high_value_orders
+        description: "number(15,0) in PowerCenter"
+      - name: customer_type
+        description: "varchar2(20,0) in PowerCenter"
+      - name: recency_days
+        description: "number(15,0) in PowerCenter"
+      - name: r_score
+        description: "number(p,s)(1,0) in PowerCenter"
+      - name: f_score
+        description: "number(p,s)(1,0) in PowerCenter"
+      - name: m_score
+        description: "number(p,s)(1,0) in PowerCenter"
+      - name: rfm_score
+        description: "number(15,0) in PowerCenter"
+      - name: rfm_segment
+        description: "varchar2(20,0) in PowerCenter"

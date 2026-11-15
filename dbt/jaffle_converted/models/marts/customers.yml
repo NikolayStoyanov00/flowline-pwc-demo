@@ -1,0 +1,26 @@
+version: 2
+
+models:
+  - name: customers
+    description: >
+      Converted from PowerCenter mapping m_FL_JS_MARTS_CORE,
+      target MART.CUSTOMERS.
+    columns:
+      - name: customer_id
+        description: "varchar2(100,0) in PowerCenter"
+      - name: customer_name
+        description: "varchar2(200,0) in PowerCenter"
+      - name: lifetime_orders
+        description: "number(15,0) in PowerCenter"
+      - name: first_order_date
+        description: "date(19,0) in PowerCenter"
+      - name: last_order_date
+        description: "date(19,0) in PowerCenter"
+      - name: lifetime_spend
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: lifetime_spend_pretax
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: lifetime_tax_paid
+        description: "number(p,s)(12,2) in PowerCenter"
+      - name: customer_type
+        description: "varchar2(20,0) in PowerCenter"

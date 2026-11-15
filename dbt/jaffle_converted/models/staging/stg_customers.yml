@@ -1,0 +1,15 @@
+version: 2
+
+models:
+  - name: stg_customers
+    description: >
+      Converted from PowerCenter mapping m_FL_JS_STAGING_FULL,
+      target STG.STG_CUSTOMERS.
+    columns:
+      - name: customer_id
+        description: "varchar2(100,0) in PowerCenter"
+        data_tests:
+          - unique
+          - not_null
+      - name: customer_name
+        description: "varchar2(200,0) in PowerCenter"

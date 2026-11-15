@@ -1,0 +1,29 @@
+version: 2
+
+models:
+  - name: int_srt_order_id
+    description: >
+      Shared step SRT_ORDER_ID of PowerCenter mapping
+      m_FL_JS_MARTS_ENRICHED, built once because several targets read it.
+    columns:
+      - name: order_id
+      - name: order_item_id
+      - name: product_id
+      - name: customer_id
+      - name: customer_name
+      - name: location_id
+      - name: location_name
+      - name: region
+      - name: ordered_at_day
+      - name: product_name
+      - name: product_type
+      - name: product_price
+      - name: is_food_item
+      - name: is_drink_item
+      - name: item_revenue
+      - name: item_cogs
+      - name: item_gross_profit
+      - name: item_gross_margin_pct
+      - name: item_tax_estimate
+      - name: item_total_estimate
+      - name: has_perishable_supply

@@ -30,11 +30,18 @@ def by_name(plans):
 
 
 class TestModelsProduced:
-    def test_three_mappings_produce_sixteen_models(self, plans) -> None:
-        assert len(plans) == 16
+    def test_sixteen_targets_plus_two_shared_steps(self, plans) -> None:
+        assert len([p for p in plans if not p.is_intermediate]) == 16
+        assert [p.name for p in plans if p.is_intermediate] == [
+            "int_srt_order_id",
+            "int_un_order_bands",
+        ]
+        assert len(plans) == 18
 
     def test_model_file_paths(self, plans) -> None:
         assert sorted(plan.path for plan in plans) == [
+            "intermediate/int_srt_order_id.sql",
+            "intermediate/int_un_order_bands.sql",
             "marts/customer_360.sql",
             "marts/customers.sql",
             "marts/order_financials.sql",
@@ -60,7 +67,8 @@ class TestModelsProduced:
             per_mapping[plan.mapping_name] = per_mapping.get(plan.mapping_name, 0) + 1
         assert per_mapping == {
             "m_FL_JS_STAGING_FULL": 6,
-            "m_FL_JS_MARTS_ENRICHED": 5,
+            # Five targets, plus the two forks promoted to shared models.
+            "m_FL_JS_MARTS_ENRICHED": 7,
             "m_FL_JS_MARTS_CORE": 5,
         }
 
