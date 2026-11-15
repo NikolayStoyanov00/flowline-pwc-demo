@@ -64,8 +64,9 @@ def built(repo, tmp_path_factory):
             + result.stderr[-2000:]
         )
 
-    connection = duckdb.connect(str(out / "jaffle_converted.duckdb"), read_only=True)
-    yield connection, result.stdout
+    database = out / "jaffle_converted.duckdb"
+    connection = duckdb.connect(str(database), read_only=True)
+    yield connection, result.stdout, database
     connection.close()
 
 
@@ -75,16 +76,16 @@ def count(connection, table: str) -> int:
 
 class TestItBuilds:
     def test_dbt_build_succeeds_with_no_errors(self, built) -> None:
-        _, output = built
+        _, output, _ = built
         assert "ERROR=0" in output
 
     def test_every_model_and_test_passed(self, built) -> None:
-        _, output = built
+        _, output, _ = built
         assert "WARN=0" in output
         assert "Completed successfully" in output
 
     def test_all_eighteen_models_exist(self, built) -> None:
-        connection, _ = built
+        connection, _, _ = built
         tables = {
             row[0]
             for row in connection.execute(
@@ -129,7 +130,7 @@ class TestStagingIsOneToOneWithItsSource:
         ],
     )
     def test_no_rows_are_gained_or_lost(self, built, model, seed) -> None:
-        connection, _ = built
+        connection, _, _ = built
         assert count(connection, model) == count(connection, seed)
 
 
@@ -138,7 +139,7 @@ class TestTheCrossedPriceColumns:
         """EXP_PRODUCTS computes dollars into PRODUCT_PRICE and cents into
         PRODUCT_PRICE_CENTS; the connectors then cross them. So the column
         named for cents holds dollars, and vice versa."""
-        connection, _ = built
+        connection, _, _ = built
         rows = connection.execute(
             "select p.product_price, p.product_price_cents, r.price "
             "from stg_products p join raw_products r on r.sku = p.product_id "
@@ -157,7 +158,7 @@ class TestMasterOuterJoinDropsRows:
     evidence the mapping's join type is not what its author intended."""
 
     def test_customers_without_orders_are_dropped(self, built) -> None:
-        connection, _ = built
+        connection, _, _ = built
         seeded = count(connection, "raw_customers")
         in_mart = count(connection, "customers")
         with_orders = connection.execute(
@@ -168,7 +169,7 @@ class TestMasterOuterJoinDropsRows:
         assert in_mart < seeded
 
     def test_orders_without_items_are_dropped(self, built) -> None:
-        connection, _ = built
+        connection, _, _ = built
         orphans = connection.execute(
             "select count(*) from raw_orders o where not exists "
             "(select 1 from raw_items i where i.order_id = o.id)"
@@ -181,7 +182,7 @@ class TestRowNumberCounter:
     def test_the_counter_restarts_for_each_customer(self, built) -> None:
         """If the partition were missing, the numbering would run across the
         whole table instead of per customer."""
-        connection, _ = built
+        connection, _, _ = built
         mismatches = connection.execute(
             "select count(*) from ("
             "  select customer_id, max(customer_order_number) as highest, "
@@ -192,7 +193,7 @@ class TestRowNumberCounter:
         assert mismatches == 0
 
     def test_the_numbering_has_no_gaps_or_repeats(self, built) -> None:
-        connection, _ = built
+        connection, _, _ = built
         repeats = connection.execute(
             "select count(*) from ("
             "  select customer_id, customer_order_number, count(*) as n"
@@ -206,11 +207,11 @@ class TestRouterAndUnionRoundTrip:
     def test_every_location_survives_the_router_and_union(self, built) -> None:
         """RTR_REGION splits locations three ways on a derived region and
         UN_REGIONS merges them back, so nothing should be lost or duplicated."""
-        connection, _ = built
+        connection, _, _ = built
         assert count(connection, "stg_locations") == count(connection, "raw_stores")
 
     def test_each_location_lands_in_exactly_one_region(self, built) -> None:
-        connection, _ = built
+        connection, _, _ = built
         duplicates = connection.execute(
             "select count(*) from ("
             "  select location_id, count(*) as n from stg_locations group by 1"
@@ -293,13 +294,9 @@ class TestAgainstTheReferenceImplementation:
         from pwc2dbt.compare import compare
         from pwc2dbt.simulate import VariableOrder
 
-        connection, _ = built
-        database = Path(connection.execute("select current_database()").fetchone()[0])
+        _, _, database = built
         comparison = compare(
-            repo,
-            SEEDS,
-            SEEDS.parent.parent / "dbt" / "jaffle_converted" / "jaffle_converted.duckdb",
-            variable_order=VariableOrder.DEFERRED,
+            repo, SEEDS, database, variable_order=VariableOrder.DEFERRED
         )
         differing = {
             diff.name: dict(diff.mismatched) or diff.note
@@ -317,11 +314,9 @@ class TestAgainstTheReferenceImplementation:
         from pwc2dbt.compare import compare
         from pwc2dbt.simulate import VariableOrder
 
+        _, _, database = built
         comparison = compare(
-            repo,
-            SEEDS,
-            SEEDS.parent.parent / "dbt" / "jaffle_converted" / "jaffle_converted.duckdb",
-            variable_order=VariableOrder.DOCUMENT,
+            repo, SEEDS, database, variable_order=VariableOrder.DOCUMENT
         )
         assert {diff.name for diff in comparison.differing} == {
             "ORDERS",

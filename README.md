@@ -598,11 +598,19 @@ exchange. Email addresses and home paths are redacted.
 FLOWLINE_DEMO_JAFFLESHOP.xml   the input, unchanged
 src/pwc2dbt/                   the converter
 tests/                         239 tests
+scripts/browse.py              opens the built warehouse in a browser
 seeds/jaffle/                  sample data, a subset of dbt's jaffle shop seeds
-dbt/jaffle_converted/          generated output, committed as evidence
 docs/concepts.md               PowerCenter vocabulary in SQL terms
+docs/example-output/           three generated models, to read without running
 docs/agent-transcript/         prompts and full conversation
 ```
+
+**`dbt/` is not tracked.** The whole dbt project is output of
+`pwc2dbt convert`, so committing it would put 36 generated files in the repo
+and make them go stale the moment the converter changed. Run step 2 of the
+quickstart to produce it. Three representative models live in
+[`docs/example-output/`](docs/example-output/) so the output can still be read
+without running anything.
 
 The sample export is from
 [infinitelambda/flowline-pwc-demo](https://github.com/infinitelambda/flowline-pwc-demo).
