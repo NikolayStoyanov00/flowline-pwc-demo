@@ -113,6 +113,62 @@ class _ModelBuilder:
             found[connector.to_field] = origin
         return found
 
+    def sole_upstream(self, instance: Instance, inputs: dict[str, Column]) -> str:
+        """The one CTE a step reads, or an error naming the step.
+
+        Most steps take a single input. A step wired from two upstreams would
+        otherwise select from the first while emitting the second's columns
+        unqualified.
+        """
+        upstream = self.upstream_ctes(inputs)
+        if len(upstream) != 1:
+            raise SqlError(
+                f"{self.mapping.name}: {instance.name} reads "
+                f"{len(upstream)} inputs, expected 1"
+            )
+        return upstream[0]
+
+    def column_item(
+        self,
+        instance: Instance,
+        cte: str,
+        port_name: str,
+        sql: str,
+        alias: str | None = None,
+    ) -> str:
+        """One select item, registering where the next step will find it.
+
+        Emitting and registering belong together: the alias written into the
+        SQL has to be the name the lookup records, or a later step asks for a
+        column that is not there.
+        """
+        column = (alias or port_name).lower()
+        self.register(instance.name, port_name, Column(cte, column))
+        return _select_item(sql, column)
+
+    def carry(
+        self,
+        instance: Instance,
+        transformation: Transformation,
+        inputs: dict[str, Column],
+        cte: str,
+        *,
+        qualify: bool = False,
+    ) -> list[str]:
+        """Select items for every output port that an input feeds unchanged.
+
+        Steps that only rename — Source Qualifier, Sorter, Filter — consist of
+        nothing else, and a Joiner's output is this plus a join clause.
+        """
+        items = []
+        for port in transformation.ports:
+            if not port.is_output or port.name not in inputs:
+                continue
+            column = inputs[port.name]
+            sql = f"{column.cte}.{column.name}" if qualify else column.name
+            items.append(self.column_item(instance, cte, port.name, sql))
+        return items
+
     def upstream_ctes(self, inputs: dict[str, Column]) -> list[str]:
         seen: list[str] = []
         for column in inputs.values():
@@ -364,39 +420,23 @@ class _ModelBuilder:
         for column in read.table.columns:
             self.register(instance.name, column.name, Column(name, column.name.lower()))
 
+
     def emit_passthrough(self, instance: Instance, note: str = "") -> None:
         """A step that only renames columns: Source Qualifier, Sorter."""
         inputs = self.inputs_of(instance)
-        upstream = self.upstream_ctes(inputs)
-        if len(upstream) != 1:
-            raise SqlError(
-                f"{self.mapping.name}: {instance.name} reads "
-                f"{len(upstream)} inputs, expected 1"
-            )
+        upstream = self.sole_upstream(instance, inputs)
         transformation = self.definition(instance)
         name = _cte_name(instance.name)
 
-        items = []
-        for port in transformation.ports:
-            if not port.is_output or port.name not in inputs:
-                continue
-            items.append(_select_item(inputs[port.name].name, port.name.lower()))
-            self.register(instance.name, port.name, Column(name, port.name.lower()))
-
+        items = self.carry(instance, transformation, inputs, name)
         if not items:
             raise SqlError(f"{self.mapping.name}: {instance.name} emits no columns")
 
-        body = _select(items, upstream[0], note=note)
-        self.add_cte(name, body)
+        self.add_cte(name, _select(items, upstream, note=note))
 
     def emit_expression(self, instance: Instance) -> None:
         inputs = self.inputs_of(instance)
-        upstream = self.upstream_ctes(inputs)
-        if len(upstream) != 1:
-            raise SqlError(
-                f"{self.mapping.name}: {instance.name} reads "
-                f"{len(upstream)} inputs, expected 1"
-            )
+        upstream = self.sole_upstream(instance, inputs)
         transformation = self.definition(instance)
         name = _cte_name(instance.name)
         variables = self.variable_sql(transformation, inputs, qualify=False)
@@ -421,14 +461,12 @@ class _ModelBuilder:
                 )
             else:
                 continue
-            items.append(_select_item(sql, port.name.lower()))
-            self.register(instance.name, port.name, Column(name, port.name.lower()))
+            items.append(self.column_item(instance, name, port.name, sql))
 
-        self.add_cte(name, _select(items, upstream[0]))
+        self.add_cte(name, _select(items, upstream))
 
     def emit_filter(self, instance: Instance) -> None:
         inputs = self.inputs_of(instance)
-        upstream = self.upstream_ctes(inputs)
         transformation = self.definition(instance)
         name = _cte_name(instance.name)
         condition = transformation.attribute("Filter Condition")
@@ -436,20 +474,15 @@ class _ModelBuilder:
             self.emit_passthrough(instance, note="filter had no condition")
             return
 
+        upstream = self.sole_upstream(instance, inputs)
         resolve = self.resolver(inputs, qualify=False)
-        items = []
-        for port in transformation.ports:
-            if not port.is_output or port.name not in inputs:
-                continue
-            items.append(_select_item(inputs[port.name].name, port.name.lower()))
-            self.register(instance.name, port.name, Column(name, port.name.lower()))
-
+        items = self.carry(instance, transformation, inputs, name)
         where = translate(condition, resolver=resolve, parameters=self.parameters)
-        self.add_cte(name, _select(items, upstream[0], where=where))
+        self.add_cte(name, _select(items, upstream, where=where))
 
     def emit_aggregator(self, instance: Instance) -> None:
         inputs = self.inputs_of(instance)
-        upstream = self.upstream_ctes(inputs)
+        upstream = self.sole_upstream(instance, inputs)
         transformation = self.definition(instance)
         name = _cte_name(instance.name)
         resolve = self.resolver(inputs, qualify=False)
@@ -478,7 +511,7 @@ class _ModelBuilder:
                 if not port.is_output:
                     grouped_not_emitted.append(sql)
                     continue
-                grouped.append(_select_item(sql, port.name.lower()))
+                grouped.append(self.column_item(instance, name, port.name, sql))
                 order.append(("group", port.name))
             elif not port.is_output:
                 continue
@@ -489,19 +522,14 @@ class _ModelBuilder:
                     result_datatype=port.datatype,
                     parameters=self.parameters,
                 )
-                aggregated.append(_select_item(sql, port.name.lower()))
+                aggregated.append(self.column_item(instance, name, port.name, sql))
                 order.append(("agg", port.name))
-            else:
-                continue
-            self.register(instance.name, port.name, Column(name, port.name.lower()))
 
         items = grouped + aggregated
         # Emitted keys go in by position, which is the dbt house style; a key
         # that is not selected has to go in as its own expression.
         keys = [str(i + 1) for i in range(len(grouped))] + grouped_not_emitted
-        self.add_cte(
-            name, _select(items, upstream[0], group_by=", ".join(keys))
-        )
+        self.add_cte(name, _select(items, upstream, group_by=", ".join(keys)))
 
     def emit_joiner(self, instance: Instance) -> None:
         transformation = self.definition(instance)
@@ -540,16 +568,7 @@ class _ModelBuilder:
                 f"{join_type!r}"
             )
 
-        items = []
-        for port in transformation.ports:
-            if not port.is_output or port.name not in inputs:
-                continue
-            column = inputs[port.name]
-            items.append(
-                _select_item(f"{column.cte}.{column.name}", port.name.lower())
-            )
-            self.register(instance.name, port.name, Column(name, port.name.lower()))
-
+        items = self.carry(instance, transformation, inputs, name, qualify=True)
         body = _select(
             items,
             left,
@@ -561,7 +580,7 @@ class _ModelBuilder:
     def emit_router(self, instance: Instance) -> None:
         transformation = self.definition(instance)
         inputs = self.inputs_of(instance)
-        upstream = self.upstream_ctes(inputs)
+        upstream = self.sole_upstream(instance, inputs)
         resolve = self.resolver(inputs, qualify=False)
 
         used_groups = {
@@ -583,8 +602,11 @@ class _ModelBuilder:
                 origin = port.ref_field or port.name
                 if origin not in inputs:
                     continue
-                items.append(_select_item(inputs[origin].name, origin.lower()))
-                self.register(instance.name, port.name, Column(name, origin.lower()))
+                items.append(
+                    self.column_item(
+                        instance, name, port.name, inputs[origin].name, alias=origin
+                    )
+                )
             where = (
                 translate(
                     group.expression, resolver=resolve, parameters=self.parameters
@@ -594,7 +616,7 @@ class _ModelBuilder:
             )
             self.add_cte(
                 name,
-                _select(items, upstream[0], where=where, note=f"router group {group.name}"),
+                _select(items, upstream, where=where, note=f"router group {group.name}"),
             )
 
     def emit_union(self, instance: Instance) -> None:
@@ -676,12 +698,7 @@ class _ModelBuilder:
             return _select(items, origin)
 
         inputs = self.inputs_of(leaf)
-        upstream = self.upstream_ctes(inputs)
-        if len(upstream) != 1:
-            raise SqlError(
-                f"{self.mapping.name}: target {leaf.name} reads "
-                f"{len(upstream)} inputs, expected 1"
-            )
+        upstream = self.sole_upstream(leaf, inputs)
 
         items = []
         for column in self.plan.table.columns:
@@ -694,7 +711,7 @@ class _ModelBuilder:
                 continue
             items.append(_select_item(origin.name, column.name.lower()))
 
-        return _select(items, upstream[0])
+        return _select(items, upstream)
 
     # -- driver -----------------------------------------------------------
     def build(self) -> str:
