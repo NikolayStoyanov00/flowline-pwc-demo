@@ -98,8 +98,16 @@ reading before relying on it.
 ### 6. Run the tests
 
 ```bash
-pytest                                 # 239 tests, about 50 seconds
+pytest                                 # 251 tests, about 35 seconds
 ```
+
+---
+
+**Reviewing this rather than just running it?**
+[`docs/REVIEW.md`](docs/REVIEW.md) is a two-hour path through it: trace one
+model from XML to SQL to rows, check the numbers against the seed CSVs without
+trusting the converter, then break the mapping on purpose and watch the output
+change.
 
 ---
 
@@ -597,10 +605,11 @@ exchange. Email addresses and home paths are redacted.
 ```
 FLOWLINE_DEMO_JAFFLESHOP.xml   the input, unchanged
 src/pwc2dbt/                   the converter
-tests/                         239 tests
+tests/                         251 tests
 scripts/browse.py              opens the built warehouse in a browser
 seeds/jaffle/                  sample data, a subset of dbt's jaffle shop seeds
 docs/concepts.md               PowerCenter vocabulary in SQL terms
+docs/REVIEW.md                 how to verify this, step by step
 docs/example-output/           three generated models, to read without running
 docs/agent-transcript/         prompts and full conversation
 ```
