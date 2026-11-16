@@ -47,26 +47,27 @@ def built(repo, tmp_path_factory):
         pytest.skip(f"no seed data at {SEEDS}")
 
     out = tmp_path_factory.mktemp("dbt_run")
-    write_project(repo, out, seeds_dir=SEEDS)
+    emitted = write_project(repo, out, seeds_dir=SEEDS)
 
-    result = subprocess.run(
+    built = subprocess.run(
         [dbt, "build", "--project-dir", str(out), "--profiles-dir", str(out)],
         capture_output=True,
         text=True,
         cwd=out,
         timeout=900,
     )
-    if result.returncode != 0:
+    if built.returncode != 0:
         pytest.fail(
             "dbt build failed\n"
-            + result.stdout[-6000:]
+            + built.stdout[-6000:]
             + "\n--- stderr ---\n"
-            + result.stderr[-2000:]
+            + built.stderr[-2000:]
         )
 
-    database = out / "jaffle_converted.duckdb"
+    # The project, and so the database, is named after the output directory.
+    database = out / f"{emitted.project_name}.duckdb"
     connection = duckdb.connect(str(database), read_only=True)
-    yield connection, result.stdout, database
+    yield connection, built.stdout, database
     connection.close()
 
 
@@ -230,7 +231,7 @@ class TestMappingVariable:
             pytest.skip("dbt or seed data unavailable")
 
         out = tmp_path / "vars"
-        write_project(repo, out, seeds_dir=SEEDS)
+        emitted = write_project(repo, out, seeds_dir=SEEDS)
 
         # Seed first: the models read *sources*, and dbt has no edge from a
         # source to the seed that fills it, so "+customer_360" would not
@@ -268,7 +269,7 @@ class TestMappingVariable:
             )
             assert result.returncode == 0, result.stdout[-4000:]
             connection = duckdb.connect(
-                str(out / "jaffle_converted.duckdb"), read_only=True
+                str(out / f"{emitted.project_name}.duckdb"), read_only=True
             )
             recencies.append(
                 connection.execute(

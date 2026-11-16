@@ -268,3 +268,125 @@ class TestFailureIsLoud:
         )
         with pytest.raises(SqlError, match="SQ_RAW_CUSTOMERS"):
             build_model_sql(repo, broken)
+
+
+class TestStatefulVariableShapes:
+    """A variable reading its own previous value is only translatable when it
+    is a running *count*. Anything else must fail loudly rather than be
+    emitted as a row ordinal."""
+
+    @staticmethod
+    def _transformation(counter_expression: str):
+        from pwc2dbt.model import Kind, Port, Transformation
+
+        return Transformation(
+            name="EXP_T",
+            kind=Kind.EXPRESSION,
+            ports=(
+                Port(name="CUSTOMER_ID", port_type="INPUT"),
+                Port(name="AMOUNT", port_type="INPUT", datatype="decimal"),
+                Port(
+                    name="v_PREV_C",
+                    port_type="LOCAL VARIABLE",
+                    expression="CUSTOMER_ID",
+                ),
+                Port(
+                    name="v_C",
+                    port_type="LOCAL VARIABLE",
+                    datatype="integer",
+                    expression=counter_expression,
+                ),
+            ),
+        )
+
+    def _keys(self, expression: str):
+        """Run just the shape check, with a builder over a throwaway mapping."""
+        from pwc2dbt.sql import _ModelBuilder
+
+        transformation = self._transformation(expression)
+        builder = _ModelBuilder.__new__(_ModelBuilder)
+        builder.mapping = type("M", (), {"name": "m"})()
+        return builder.counter_partition_keys(
+            transformation, transformation.ports[-1]
+        )
+
+    def test_a_running_count_is_recognised(self) -> None:
+        assert self._keys("IIF(v_PREV_C = CUSTOMER_ID, v_C + 1, 1)") == (
+            "CUSTOMER_ID",
+        )
+
+    def test_the_increment_may_be_written_either_way_round(self) -> None:
+        assert self._keys("IIF(v_PREV_C = CUSTOMER_ID, 1 + v_C, 1)") == (
+            "CUSTOMER_ID",
+        )
+
+    @pytest.mark.parametrize(
+        ("expression", "why"),
+        [
+            (
+                "IIF(v_PREV_C = CUSTOMER_ID, v_C + AMOUNT, AMOUNT)",
+                "a running total, not a count",
+            ),
+            (
+                "IIF(v_PREV_C = CUSTOMER_ID, v_C + 2, 1)",
+                "steps by two",
+            ),
+            (
+                "IIF(v_PREV_C = CUSTOMER_ID, v_C + 1, 0)",
+                "resets to zero, so it is off by one",
+            ),
+            (
+                "IIF(v_PREV_C = CUSTOMER_ID, v_C - 1, 1)",
+                "counts down",
+            ),
+        ],
+    )
+    def test_anything_other_than_a_count_is_refused(
+        self, expression: str, why: str
+    ) -> None:
+        """The condition is identical in all of these, so checking only the
+        condition would emit row_number() and silently replace every value."""
+        from pwc2dbt.sql import SqlError
+
+        with pytest.raises(SqlError, match="only a running count"):
+            self._keys(expression)
+
+
+class TestSortDirection:
+    def test_a_descending_sorter_orders_the_window_descending(self, repo) -> None:
+        """Sort direction is load-bearing for a window function: descending
+        makes a counter number rows from the other end."""
+        from dataclasses import replace
+
+        from pwc2dbt.graph import plan_models
+
+
+        mapping = repo.mapping("m_FL_JS_MARTS_CORE")
+        sorter = mapping.transformations["SRT_BY_CUSTOMER"]
+        flipped = replace(
+            sorter,
+            ports=tuple(
+                replace(p, sort_direction="DESCENDING") if p.is_sort_key else p
+                for p in sorter.ports
+            ),
+        )
+        patched_transformations = dict(mapping.transformations)
+        patched_transformations["SRT_BY_CUSTOMER"] = flipped
+        patched = replace(mapping, transformations=patched_transformations)
+        patched_repo = replace(
+            repo,
+            mappings=tuple(
+                patched if m.name == mapping.name else m for m in repo.mappings
+            ),
+        )
+
+        plan = next(p for p in plan_models(patched_repo) if p.name == "orders")
+        sql = build_model_sql(patched_repo, plan)
+        assert "order by ordered_at_day desc, order_id desc" in sql
+
+    def test_the_real_export_is_all_ascending(self, models) -> None:
+        # All 140 sort keys in this export are ASCENDING, so no ordering in
+        # the generated project should be descending. The word boundary keeps
+        # this from matching "description".
+        for name, sql in models.items():
+            assert not re.search(r"\bdesc\b", sql), name

@@ -14,18 +14,19 @@ from pathlib import Path
 
 from .graph import ModelPlan, build_graph, plan_models
 from .model import Kind, Repository, Table, Transformation
-from .naming import source_name
+from .naming import LAYERS, project_name, source_name
 from .sql import build_model_sql
 
 __all__ = ["EmitResult", "write_project"]
 
-PROJECT_NAME = "jaffle_converted"
-PROFILE_NAME = "jaffle_converted"
+#: Used when the export's folder name cannot supply one.
+FALLBACK_PROJECT_NAME = "pwc_converted"
 
 
 @dataclass(frozen=True, slots=True)
 class EmitResult:
     out_dir: Path
+    project_name: str
     models: tuple[str, ...]
     files: tuple[Path, ...]
     tests: int
@@ -266,13 +267,20 @@ def _vars_block(repo: Repository) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _dbt_project_yml() -> str:
+def _dbt_project_yml(name: str) -> str:
+    # Layers come from one table, so a layer cannot have a directory here and
+    # no materialization — which is what left the promoted shared models as
+    # views, re-executed once per consumer. See naming.LAYERS.
+    layers = "\n".join(
+        f"    {layer.directory}:\n      +materialized: {layer.materialized}"
+        for layer in LAYERS
+    )
     return f"""\
-name: '{PROJECT_NAME}'
+name: '{name}'
 version: '1.0.0'
 config-version: 2
 
-profile: '{PROFILE_NAME}'
+profile: '{name}'
 
 model-paths: ["models"]
 seed-paths: ["seeds"]
@@ -280,27 +288,22 @@ macro-paths: ["macros"]
 target-path: "target"
 clean-targets: ["target", "dbt_packages"]
 
-# Every PowerCenter target was loaded with truncate-and-insert, so a table is
-# the faithful materialization. Staging stays a view, per dbt convention.
 models:
-  {PROJECT_NAME}:
-    staging:
-      +materialized: view
-    marts:
-      +materialized: table
+  {name}:
+{layers}
 """
 
 
-def _profiles_yml() -> str:
+def _profiles_yml(name: str) -> str:
     return f"""\
 # Committed deliberately so the project runs with no setup. DuckDB writes to a
 # local file, so no warehouse credentials exist to leak.
-{PROFILE_NAME}:
+{name}:
   target: dev
   outputs:
     dev:
       type: duckdb
-      path: '{PROJECT_NAME}.duckdb'
+      path: '{name}.duckdb'
       threads: 4
 """
 
@@ -328,8 +331,17 @@ def write_project(
         path.write_text(content, encoding="utf-8")
         written.append(path)
 
-    write("dbt_project.yml", _dbt_project_yml() + _vars_block(repo))
-    write("profiles.yml", _profiles_yml())
+    # Named after the output directory, falling back to the PowerCenter
+    # folder. It used to be the constant "jaffle_converted", so converting a
+    # second export produced a second project with the same name, the same
+    # profile and the same DuckDB filename as the first.
+    name = (
+        project_name(out_dir.name)
+        or project_name(repo.folder_name)
+        or FALLBACK_PROJECT_NAME
+    )
+    write("dbt_project.yml", _dbt_project_yml(name) + _vars_block(repo))
+    write("profiles.yml", _profiles_yml(name))
 
     model_tables = {plan.table.name for plan in plans if plan.table}
     raw_tables = [
@@ -354,6 +366,7 @@ def write_project(
 
     return EmitResult(
         out_dir=out_dir,
+        project_name=name,
         models=tuple(plan.name for plan in plans),
         files=tuple(written),
         tests=test_count,

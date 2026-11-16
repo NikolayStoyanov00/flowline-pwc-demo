@@ -21,6 +21,7 @@ from enum import Enum, auto
 from typing import Callable, Iterable, Mapping as MappingABC, Sequence
 
 from .model import Port
+from .naming import is_date, is_string
 
 __all__ = [
     "ExpressionError",
@@ -28,6 +29,7 @@ __all__ = [
     "parse_expression",
     "order_variable_ports",
     "stateful_variable_ports",
+    "references",
     "SUPPORTED_FUNCTIONS",
 ]
 
@@ -430,11 +432,6 @@ def _precedence(node: Node) -> int:
     return _ATOM
 
 
-#: PowerCenter datatypes that must reach SQL as a timestamp, not a bare value.
-_DATE_TYPES = {"date/time", "date", "timestamp"}
-_STRING_TYPES = {"string", "nstring", "text"}
-
-
 class _Emitter:
     def __init__(
         self,
@@ -455,9 +452,9 @@ class _Emitter:
         """
         jinja = '{{ var("' + node.name.lstrip("$").lower() + '") }}'
         datatype = (self.parameters.get(node.name) or "").lower()
-        if datatype in _DATE_TYPES:
+        if is_date(datatype):
             return f"cast('{jinja}' as timestamp)"
-        if datatype and datatype not in _STRING_TYPES:
+        if datatype and not is_string(datatype):
             return jinja
         # Strings, and anything undeclared: a quoted literal is the safe
         # reading, since an unquoted one can parse as something else entirely.
@@ -501,7 +498,10 @@ class _Emitter:
                     )
                 return f"{self.emit(inner.arguments[0], 4)} is not null"
             return f"not {self.emit(inner, 3)}"
-        return f"{node.operator}{self.emit(node.operand, 8)}"
+        # minimum=9, not 8: at equal precedence the operand is not
+        # bracketed, and "-" applied to "-x" emits "--x", which SQL reads
+        # as a line comment.
+        return f"{node.operator}{self.emit(node.operand, 9)}"
 
     def emit_binary(self, node: Binary) -> str:
         operator = {"!=": "<>", "AND": "and", "OR": "or"}.get(
@@ -538,7 +538,7 @@ class _Emitter:
             )
         if len(args) == 2:
             body = f"case when {self.emit(args[0])} then {self.emit(args[1])} end"
-            if self.result_datatype in {"string", "nstring", "text"}:
+            if is_string(self.result_datatype):
                 return f"coalesce({body}, '')"
             return body
         raise ExpressionError(f"IIF takes 2 or 3 arguments, got {len(args)}")
@@ -683,15 +683,16 @@ def translate(
 # ---------------------------------------------------------------------------
 
 
-def _references(node: Node) -> set[str]:
+def references(node: Node) -> set[str]:
+    """Every port or variable name an expression reads."""
     if isinstance(node, Reference):
         return {node.name}
     if isinstance(node, Unary):
-        return _references(node.operand)
+        return references(node.operand)
     if isinstance(node, Binary):
-        return _references(node.left) | _references(node.right)
+        return references(node.left) | references(node.right)
     if isinstance(node, Call):
-        return set().union(*(_references(a) for a in node.arguments)) if node.arguments else set()
+        return set().union(*(references(a) for a in node.arguments)) if node.arguments else set()
     return set()
 
 
@@ -713,7 +714,7 @@ def stateful_variable_ports(ports: Iterable[Port]) -> tuple[Port, ...]:
     for port in ports:
         if not (port.is_variable and port.expression):
             continue
-        if port.name in _references(parse_expression(port.expression)):
+        if port.name in references(parse_expression(port.expression)):
             stateful.append(port)
     return tuple(stateful)
 
@@ -748,7 +749,7 @@ def order_variable_ports(
     needs = {
         p.name: {
             name
-            for name in _references(parse_expression(p.expression))
+            for name in references(parse_expression(p.expression))
             if name in by_name and name != p.name
         }
         for p in variables

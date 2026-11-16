@@ -18,17 +18,18 @@ from typing import Callable, Iterable
 from .expressions import (
     Binary,
     Call,
-    Unary,
     ExpressionError,
+    Number,
     Reference,
     order_variable_ports,
     parse_expression,
+    references,
     stateful_variable_ports,
     translate,
 )
 from .graph import Graph, ModelPlan, build_graph
-from .naming import sql_type
 from .model import Instance, Kind, Mapping, Port, Repository, Transformation
+from .naming import sql_type
 
 __all__ = ["SqlError", "build_model_sql", "INDENT"]
 
@@ -213,7 +214,7 @@ class _ModelBuilder:
         value = translate(
             port.expression, resolver=resolve, parameters=self.parameters
         )
-        order_sql = ", ".join(resolve(key) for key in ordering)
+        order_sql = _order_by(ordering, resolve)
         self.notes.append(
             f"{transformation.name}.{port.name} held the previous row's value; "
             "translated as lag()"
@@ -249,9 +250,8 @@ class _ModelBuilder:
 
         resolve = self.resolver(inputs, qualify=qualify)
         partition_sql = ", ".join(resolve(key) for key in partition)
-        order_sql = ", ".join(resolve(key) for key in ordering if key not in partition)
-        if not order_sql:
-            order_sql = ", ".join(resolve(key) for key in ordering)
+        remaining = [k for k in ordering if k[0] not in partition] or list(ordering)
+        order_sql = _order_by(remaining, resolve)
 
         self.notes.append(
             f"{transformation.name}.{port.name} was a variable holding its own "
@@ -263,32 +263,34 @@ class _ModelBuilder:
     def counter_partition_keys(
         self, transformation: Transformation, port: Port
     ) -> tuple[str, ...]:
-        """Input columns the counter restarts on."""
+        """Input columns the counter restarts on.
+
+        Only the counter shape is accepted — ``+ 1`` and a reset to ``1``.
+        Checking the condition alone is not enough: a running *total*
+        (``IIF(v_PREV_C = C, v_TOTAL + AMOUNT, AMOUNT)``) has the same
+        condition and also reads its own previous value, and emitting
+        ``row_number()`` for it would silently replace every total with a row
+        ordinal. A running total is a window ``sum``, which is not translated.
+        """
         tree = parse_expression(port.expression or "")
-        if not (isinstance(tree, Call) and tree.name == "IIF" and len(tree.arguments) == 3):
+        if not _is_increment_by_one(tree, port.name):
             raise SqlError(
-                f"{self.mapping.name}: {transformation.name}.{port.name} holds "
-                "its own previous value but is not the IIF(previous = current, "
-                "counter + 1, 1) shape, so it cannot be translated"
+                f"{self.mapping.name}: {transformation.name}.{port.name} reads "
+                "its own previous value but is not the "
+                "IIF(previous = current, counter + 1, 1) shape, so it cannot "
+                "be translated; only a running count is supported"
             )
 
-        previous = {
-            p.name: p.expression
-            for p in transformation.ports
-            if p.is_variable and p.expression and isinstance(
-                parse_expression(p.expression), Reference
-            )
-        }
+        previous = _bare_reference_ports(transformation)
 
         keys: list[str] = []
         for left, right in _equalities(tree.arguments[0]):
             for a, b in ((left, right), (right, left)):
-                if isinstance(a, Reference) and a.name in previous and isinstance(
-                    b, Reference
-                ):
-                    # v_PREV_X = X means "restart when X changes".
-                    if previous[a.name].strip() == b.name and b.name not in keys:
-                        keys.append(b.name)
+                if not (isinstance(a, Reference) and isinstance(b, Reference)):
+                    continue
+                # v_PREV_X = X means "restart when X changes".
+                if previous.get(a.name) == b.name and b.name not in keys:
+                    keys.append(b.name)
         if not keys:
             raise SqlError(
                 f"{self.mapping.name}: cannot work out what "
@@ -296,8 +298,15 @@ class _ModelBuilder:
             )
         return tuple(keys)
 
-    def sort_order_for(self, transformation: Transformation) -> tuple[str, ...]:
-        """Sort keys of the nearest Sorter upstream of this step."""
+    def sort_order_for(
+        self, transformation: Transformation
+    ) -> tuple[tuple[str, str], ...]:
+        """Sort keys of the nearest Sorter upstream, with their directions.
+
+        The direction is carried because a window function has to order the
+        same way the Sorter did: a DESCENDING key makes a counter number rows
+        from the other end, and makes lag() return the following row.
+        """
         start = next(
             (
                 instance.name
@@ -317,7 +326,15 @@ class _ModelBuilder:
             if instance.kind is Kind.SORTER:
                 sorter = self.definition(instance)
                 if sorter.sort_keys:
-                    return tuple(p.name for p in sorter.sort_keys)
+                    return tuple(
+                        (
+                            p.name,
+                            "desc"
+                            if (p.sort_direction or "").upper().startswith("DESC")
+                            else "asc",
+                        )
+                        for p in sorter.sort_keys
+                    )
             for feeder in self.graph.feeders(name):
                 if feeder not in seen:
                     seen.add(feeder)
@@ -440,9 +457,13 @@ class _ModelBuilder:
         grouped: list[str] = []
         aggregated: list[str] = []
         order: list[tuple[str, str]] = []
+        #: Group keys the transformation does not emit. They still have to
+        #: reach the GROUP BY, or the aggregation runs at a coarser grain and
+        #: every aggregate silently covers too many rows.
+        grouped_not_emitted: list[str] = []
 
         for port in transformation.ports:
-            if not port.is_output or port.is_variable:
+            if port.is_variable:
                 continue
             if port.is_group_by:
                 sql = (
@@ -454,8 +475,13 @@ class _ModelBuilder:
                     if port.expression
                     else resolve(port.name)
                 )
+                if not port.is_output:
+                    grouped_not_emitted.append(sql)
+                    continue
                 grouped.append(_select_item(sql, port.name.lower()))
                 order.append(("group", port.name))
+            elif not port.is_output:
+                continue
             elif port.expression:
                 sql = translate(
                     port.expression,
@@ -470,10 +496,12 @@ class _ModelBuilder:
             self.register(instance.name, port.name, Column(name, port.name.lower()))
 
         items = grouped + aggregated
-        group_by = (
-            ", ".join(str(i + 1) for i in range(len(grouped))) if grouped else ""
+        # Emitted keys go in by position, which is the dbt house style; a key
+        # that is not selected has to go in as its own expression.
+        keys = [str(i + 1) for i in range(len(grouped))] + grouped_not_emitted
+        self.add_cte(
+            name, _select(items, upstream[0], group_by=", ".join(keys))
         )
-        self.add_cte(name, _select(items, upstream[0], group_by=group_by))
 
     def emit_joiner(self, instance: Instance) -> None:
         transformation = self.definition(instance)
@@ -714,16 +742,78 @@ class _ModelBuilder:
                 f"-- target {self.plan.leaf.definition_name} "
                 f"({self.plan.schema}.{self.plan.table.name})"
             )
+        body = ",\n\n".join(f"{name} as (\n{sql}\n)" for name, sql in self.ctes)
         for note in dict.fromkeys(self.notes):
+            # The header is the audit trail for the conversion, so drop a note
+            # about a translation that ended up discarded — a remembered
+            # variable becomes lag() only to be replaced when the counter that
+            # reads it becomes row_number().
+            if "lag()" in note and "lag(" not in body:
+                continue
             header.append(f"-- note: {note}")
 
-        blocks = [f"{name} as (\n{body}\n)" for name, body in self.ctes]
         return (
             "\n".join(header)
             + "\n\nwith\n\n"
-            + ",\n\n".join(blocks)
+            + body
             + "\n\nselect * from final\n"
         )
+
+
+def _order_by(
+    keys: Iterable[tuple[str, str]], resolve: Callable[[str], str]
+) -> str:
+    """An ORDER BY list, keeping each key's direction. `asc` is left implicit."""
+    return ", ".join(
+        resolve(name) if direction == "asc" else f"{resolve(name)} desc"
+        for name, direction in keys
+    )
+
+
+def _is_increment_by_one(tree, port_name: str) -> bool:
+    """Whether ``tree`` is ``IIF(<cond>, <port> + 1, 1)``.
+
+    The branches are what separate a running count from a running total; the
+    condition is identical in both.
+    """
+    if not (isinstance(tree, Call) and tree.name == "IIF" and len(tree.arguments) == 3):
+        return False
+    increment, reset = tree.arguments[1], tree.arguments[2]
+    if not (isinstance(reset, Number) and reset.text.strip() in {"1", "1.0"}):
+        return False
+    if not (isinstance(increment, Binary) and increment.operator == "+"):
+        return False
+    # Either operand order: v_C + 1 or 1 + v_C.
+    for own, one in (
+        (increment.left, increment.right),
+        (increment.right, increment.left),
+    ):
+        if (
+            isinstance(own, Reference)
+            and own.name == port_name
+            and isinstance(one, Number)
+            and one.text.strip() in {"1", "1.0"}
+        ):
+            return True
+    return False
+
+
+def _bare_reference_ports(transformation: Transformation) -> dict[str, str]:
+    """Variable ports that are one port name, mapped to the name they read.
+
+    ``v_PREV_CUSTOMER_ID = CUSTOMER_ID`` gives
+    ``{"v_PREV_CUSTOMER_ID": "CUSTOMER_ID"}``. Defined once because two
+    translations depend on agreeing about it: which variables become ``lag()``,
+    and what a counter restarts on.
+    """
+    found: dict[str, str] = {}
+    for port in transformation.ports:
+        if not (port.is_variable and port.expression):
+            continue
+        tree = parse_expression(port.expression)
+        if isinstance(tree, Reference):
+            found[port.name] = tree.name
+    return found
 
 
 def _remembered_ports(transformation: Transformation) -> frozenset[str]:
@@ -732,13 +822,7 @@ def _remembered_ports(transformation: Transformation) -> frozenset[str]:
     A variable whose whole expression is one port name, and which another
     variable reads. Without a reader it is only an alias, so it is left alone.
     """
-    bare = {
-        port.name
-        for port in transformation.ports
-        if port.is_variable
-        and port.expression
-        and isinstance(parse_expression(port.expression), Reference)
-    }
+    bare = frozenset(_bare_reference_ports(transformation))
     if not bare:
         return frozenset()
 
@@ -746,23 +830,8 @@ def _remembered_ports(transformation: Transformation) -> frozenset[str]:
     for port in transformation.ports:
         if not (port.is_variable and port.expression) or port.name in bare:
             continue
-        read_by_others |= _names_of(parse_expression(port.expression)) & bare
+        read_by_others |= references(parse_expression(port.expression)) & bare
     return frozenset(read_by_others)
-
-
-def _names_of(node) -> set[str]:
-    if isinstance(node, Reference):
-        return {node.name}
-    if isinstance(node, Unary):
-        return _names_of(node.operand)
-    if isinstance(node, Binary):
-        return _names_of(node.left) | _names_of(node.right)
-    if isinstance(node, Call):
-        names: set[str] = set()
-        for argument in node.arguments:
-            names |= _names_of(argument)
-        return names
-    return set()
 
 
 def _equalities(node) -> Iterable[tuple[object, object]]:
@@ -808,6 +877,8 @@ def _select(
     lines: list[str] = []
     if note:
         lines.append(f"{INDENT}-- {note}")
+    if not items:
+        raise SqlError(f"nothing to select from {source}")
     lines.append(f"{INDENT}select")
     lines.extend(f"{INDENT}{INDENT}{item}," for item in items[:-1])
     lines.append(f"{INDENT}{INDENT}{items[-1]}")

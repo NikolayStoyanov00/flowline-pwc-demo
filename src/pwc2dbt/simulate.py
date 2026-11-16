@@ -33,6 +33,7 @@ from .expressions import (
     stateful_variable_ports,
 )
 from .graph import build_graph
+from .naming import is_numeric, is_string
 from .model import Connector, Instance, Kind, Mapping, Port, Repository, Transformation
 
 __all__ = ["SimulationError", "Result", "run_repository", "load_seeds", "VariableOrder"]
@@ -204,7 +205,9 @@ class _MappingRun:
             raise SimulationError(
                 f"no data supplied for source {instance.definition_name!r}"
             )
-        return {"": [dict(row) for row in rows]}
+        # No copy: every consumer goes through rows_from, which builds a
+        # fresh projected dict per row, and nothing mutates these.
+        return {"": list(rows)}
 
     def run_passthrough(self, instance: Instance) -> Grouped:
         """Source Qualifier: carries its input forward under the port names."""
@@ -297,16 +300,32 @@ class _MappingRun:
         nulls_low = transformation.attribute("Null Treated Low", "NO") == "YES"
 
         if keys:
+
             def sort_key(row):
                 out = []
                 for key in keys:
                     value = row.get(key)
                     # Nulls sort together at one end; which end is a setting.
-                    out.append((0 if nulls_low else 1) if value is None else (1 if nulls_low else 0))
+                    out.append(
+                        (0 if nulls_low else 1)
+                        if value is None
+                        else (1 if nulls_low else 0)
+                    )
                     out.append(_orderable(value))
                 return tuple(out)
 
             rows = sorted(rows, key=sort_key)
+
+            # Descending keys are applied one at a time, last key first, so
+            # that mixed directions compose. Python's sort is stable, which is
+            # what makes that work.
+            for port in reversed(transformation.sort_keys):
+                if (port.sort_direction or "").upper().startswith("DESC"):
+                    rows = sorted(
+                        rows,
+                        key=lambda row, name=port.name: _orderable(row.get(name)),
+                        reverse=True,
+                    )
 
         wanted = [p.name for p in transformation.ports if p.is_output]
         return {"": [{name: row.get(name) for name in wanted} for row in rows]}
@@ -425,8 +444,7 @@ class _MappingRun:
                 if id(master) not in matched_master:
                     produced.append(_merge(master, {}, wanted))
 
-        if join_type == "normal join":
-            pass  # unmatched rows on both sides are already excluded
+        # A normal join keeps only matches, which the loops above already do.
 
         return {"": produced}
 
@@ -561,15 +579,9 @@ def _initial_value(port: Port) -> Any:
     number, an empty string for a string, NULL for a date. Without this, a
     running counter has nothing to add to on the first row.
     """
-    datatype = (port.datatype or "").lower()
-    if datatype.startswith("number") or datatype in {
-        "decimal",
-        "double",
-        "integer",
-        "real",
-    }:
+    if is_numeric(port.datatype):
         return 0
-    if datatype in {"string", "nstring", "text"}:
+    if is_string(port.datatype):
         return ""
     return None
 
@@ -592,12 +604,10 @@ def _is_star(node: Node) -> bool:
 
 
 def _merge(master: MappingABC, detail: MappingABC, wanted: Iterable[str]) -> dict:
-    out = {}
-    for name in wanted:
-        out[name] = detail.get(name, master.get(name))
-        if out[name] is None and name in master:
-            out[name] = master[name]
-    return out
+    return {
+        name: detail[name] if name in detail else master.get(name)
+        for name in wanted
+    }
 
 
 def _equality_pairs(

@@ -17,6 +17,13 @@ def project(repo, tmp_path_factory) -> Path:
     return out
 
 
+@pytest.fixture(scope="session")
+def project_name(project) -> str:
+    """The generated project's name, which follows the output directory."""
+    first = _read(project, "dbt_project.yml").splitlines()[0]
+    return first.split("'")[1]
+
+
 def _read(project: Path, relative: str) -> str:
     path = project / relative
     assert path.is_file(), f"{relative} was not written"
@@ -44,13 +51,36 @@ class TestProjectLayout:
         assert "staging:\n      +materialized: view" in config
         assert "marts:\n      +materialized: table" in config
 
-    def test_the_profile_name_matches_the_project(self, project) -> None:
-        name = _read(project, "dbt_project.yml")
+    def test_the_profile_name_matches_the_project(self, project, project_name) -> None:
+        """They have to agree or dbt cannot find the connection."""
+        config = _read(project, "dbt_project.yml")
         profile = _read(project, "profiles.yml")
-        assert "profile: 'jaffle_converted'" in name
-        assert profile.startswith("#") or "jaffle_converted:" in profile
-        assert "jaffle_converted:" in profile
+        assert f"name: '{project_name}'" in config
+        assert f"profile: '{project_name}'" in config
+        assert f"{project_name}:" in profile
+        assert f"path: '{project_name}.duckdb'" in profile
         assert "type: duckdb" in profile
+
+    def test_the_project_is_named_after_the_output_directory(
+        self, repo, tmp_path
+    ) -> None:
+        """It used to be a constant, so converting a second export produced a
+        second project with the same name and the same database file."""
+        first = write_project(repo, tmp_path / "one_export", seeds_dir=None)
+        second = write_project(repo, tmp_path / "two-export", seeds_dir=None)
+        assert first.project_name == "one_export"
+        assert second.project_name == "two_export"
+
+    def test_every_layer_gets_a_materialization(self, project) -> None:
+        """A layer with a directory but no materialization silently defaults to
+        a view. That happened to `intermediate`, so the shared models promoted
+        to avoid duplicated work were re-executed once per consumer."""
+        from pwc2dbt.naming import LAYERS
+
+        config = _read(project, "dbt_project.yml")
+        for layer in LAYERS:
+            block = f"    {layer.directory}:\n      +materialized: {layer.materialized}"
+            assert block in config, layer.directory
 
 
 class TestSources:
