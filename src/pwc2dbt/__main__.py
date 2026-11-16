@@ -16,13 +16,13 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from .compare import CompareError, compare as compare_outputs
+from .reference.compare import CompareError, compare as compare_outputs
 from .emit import write_project
 from .expressions import ExpressionError, translate
 from .graph import ModelPlan, plan_models, split_points, unsupported_steps
 from .model import Kind, Repository, Transformation
 from .parse import ParseError, parse_file
-from .simulate import SimulationError, VariableOrder
+from .reference.simulate import SimulationError, VariableOrder
 from .sql import SqlError
 
 

@@ -17,7 +17,7 @@ from math import isclose
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
-from .model import Repository
+from ..model import Repository
 from .simulate import Result, VariableOrder, load_seeds, run_repository
 
 __all__ = ["CompareError", "TableDiff", "Comparison", "compare_tables", "compare", "same"]

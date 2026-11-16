@@ -68,7 +68,7 @@ from each target, turn each step into a CTE.
 | `expressions.py` | Informatica expression language → SQL |
 | `sql.py` | steps → CTEs → one model |
 | `emit.py` | the dbt project: models, YAML, tests, seeds |
-| `evaluate.py` `simulate.py` `compare.py` | a second implementation, for cross-checking |
+| `reference/` | a second implementation, for cross-checking |
 
 **Three decisions that shape everything:**
 

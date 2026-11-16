@@ -26,15 +26,18 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping as MappingABC, Sequence
 
 from .evaluate import AGGREGATES, EvalError, aggregate, coerce, evaluate
-from .expressions import (
+from ..expressions import (
+    Binary,
     Call,
     Node,
+    Reference,
+    Star,
     parse_expression,
     stateful_variable_ports,
 )
-from .graph import build_graph
-from .naming import is_numeric, is_string
-from .model import Connector, Instance, Kind, Mapping, Port, Repository, Transformation
+from ..graph import build_graph
+from ..naming import is_numeric, is_string
+from ..model import Connector, Instance, Kind, Mapping, Port, Repository, Transformation
 
 __all__ = ["SimulationError", "Result", "run_repository", "load_seeds", "VariableOrder"]
 
@@ -562,7 +565,6 @@ class _MappingRun:
 
 def _is_bare_reference(port: Port) -> bool:
     """Whether a variable is just one port name, e.g. ``v_PREV_ID = ID``."""
-    from .expressions import Reference
 
     if not port.expression:
         return False
@@ -598,7 +600,6 @@ def _orderable(value: Any) -> Any:
 
 
 def _is_star(node: Node) -> bool:
-    from .expressions import Star
 
     return isinstance(node, Star)
 
@@ -618,7 +619,6 @@ def _equality_pairs(
     The condition is written with either side first, so each operand is placed
     by looking at whether its port is a master port.
     """
-    from .expressions import Binary, Reference
 
     pairs: list[tuple[str, str]] = []
 

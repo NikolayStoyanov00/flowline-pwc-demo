@@ -292,8 +292,8 @@ class TestAgainstTheReferenceImplementation:
     """
 
     def test_every_table_matches_cell_for_cell(self, repo, built) -> None:
-        from pwc2dbt.compare import compare
-        from pwc2dbt.simulate import VariableOrder
+        from pwc2dbt.reference.compare import compare
+        from pwc2dbt.reference.simulate import VariableOrder
 
         _, _, database = built
         comparison = compare(
@@ -312,8 +312,8 @@ class TestAgainstTheReferenceImplementation:
         Taking the XML's variable order literally changes three tables, so the
         choice is not cosmetic.
         """
-        from pwc2dbt.compare import compare
-        from pwc2dbt.simulate import VariableOrder
+        from pwc2dbt.reference.compare import compare
+        from pwc2dbt.reference.simulate import VariableOrder
 
         _, _, database = built
         comparison = compare(

@@ -119,8 +119,10 @@ and the second implementation. `git checkout src/pwc2dbt/sql.py` to revert.
 
 ## Reading the code
 
-~5,000 lines, but strictly layered: each module only knows the ones above it.
-`docs/concepts.md` first if "mapping / instance / port" is still unclear.
+~5,000 lines, strictly layered: each module only knows the ones above it, and
+`src/pwc2dbt/__init__.py` lists the stages. `reference/` is a separate concern —
+the converter never imports it — so the converter itself is ~3,600 lines.
+Read `docs/concepts.md` first if "mapping / instance / port" is still unclear.
 
 | Read | Lines | Look for |
 |---|---|---|
@@ -130,7 +132,7 @@ and the second implementation. `git checkout src/pwc2dbt/sql.py` to revert.
 | `expressions.py` | 775 | the only real algorithm: tokenise → parse → emit |
 | **`sql.py`** | 833 | **the core.** `_join_shape`, then `inputs_of`/`register` |
 | `emit.py` | 360 | the dbt project; `trace_column` attaches tests by lineage |
-| `evaluate/simulate/compare` | 1,400 | the second implementation; skim |
+| `reference/` | 1,400 | the second implementation; skim |
 
 ### Walking it through in a debugger
 

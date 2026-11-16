@@ -17,8 +17,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Mapping, Sequence
 
-from .naming import is_date, is_integer, is_numeric, is_string
-from .expressions import (
+from ..naming import is_date, is_integer, is_numeric, is_string
+from ..expressions import (
     Binary,
     Call,
     ExpressionError,

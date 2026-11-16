@@ -13,9 +13,9 @@ from pathlib import Path
 
 import pytest
 
-from pwc2dbt.compare import compare_tables, normalise, same
-from pwc2dbt.evaluate import EvalError, aggregate, coerce, evaluate
-from pwc2dbt.simulate import (
+from pwc2dbt.reference.compare import compare_tables, normalise, same
+from pwc2dbt.reference.evaluate import EvalError, aggregate, coerce, evaluate
+from pwc2dbt.reference.simulate import (
     VariableOrder,
     load_seeds,
     run_repository,
@@ -311,7 +311,7 @@ class TestMissingTableIsNotAMatch:
     """
 
     def test_a_missing_table_does_not_match_even_when_both_are_empty(self) -> None:
-        from pwc2dbt.compare import TableDiff
+        from pwc2dbt.reference.compare import TableDiff
 
         absent = TableDiff(
             name="T",
