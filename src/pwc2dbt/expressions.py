@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from enum import Enum, auto
 from typing import Callable, Iterable, Mapping as MappingABC, Sequence
 
-from .model import Port
+from .model import CycleError, Port, dependency_order
 from .naming import is_date, is_string
 
 __all__ = [
@@ -30,7 +30,8 @@ __all__ = [
     "order_variable_ports",
     "stateful_variable_ports",
     "references",
-    "SUPPORTED_FUNCTIONS",
+    "date_mask_to_strftime",
+    "date_part",
 ]
 
 
@@ -364,20 +365,25 @@ def _quote(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def _date_mask_to_strftime(mask: str) -> str:
-    out: list[str] = []
-    position = 0
-    upper = mask.upper()
-    while position < len(mask):
-        for informatica, directive in _DATE_MASK:
-            if upper.startswith(informatica, position):
-                out.append(directive)
-                position += len(informatica)
-                break
-        else:
-            out.append(mask[position])
-            position += 1
-    return "".join(out)
+#: The mask tokens, longest first, so MONTH matches before MON.
+_MASK_PATTERN = re.compile("|".join(token for token, _ in _DATE_MASK), re.IGNORECASE)
+_MASK_LOOKUP = dict(_DATE_MASK)
+
+
+def date_mask_to_strftime(mask: str) -> str:
+    """Translate an Informatica date format mask into strftime directives.
+
+    Anything that is not a mask token is left alone, so separators survive:
+    ``DD-MM-YY`` becomes ``%d-%m-%y``.
+    """
+    return _MASK_PATTERN.sub(
+        lambda m: _MASK_LOOKUP[m.group().upper()], mask
+    )
+
+
+def date_part(mask: str) -> str | None:
+    """The date part a mask names, or None if it names none."""
+    return _DATE_PARTS.get(mask.strip().upper())
 
 
 def _literal_text(node: Node, function: str, what: str) -> str:
@@ -576,13 +582,13 @@ class _Emitter:
     def fn_to_char(self, args: Sequence[Node]) -> str:
         if len(args) != 2:
             raise ExpressionError(f"TO_CHAR takes 2 arguments, got {len(args)}")
-        mask = _date_mask_to_strftime(_literal_text(args[1], "TO_CHAR", "format mask"))
+        mask = date_mask_to_strftime(_literal_text(args[1], "TO_CHAR", "format mask"))
         return f"strftime({self.emit(args[0])}, {_quote(mask)})"
 
     def fn_to_date(self, args: Sequence[Node]) -> str:
         if len(args) != 2:
             raise ExpressionError(f"TO_DATE takes 2 arguments, got {len(args)}")
-        mask = _date_mask_to_strftime(_literal_text(args[1], "TO_DATE", "format mask"))
+        mask = date_mask_to_strftime(_literal_text(args[1], "TO_DATE", "format mask"))
         return f"strptime({self.emit(args[0])}, {_quote(mask)})"
 
     def simple(self, sql_name: str, arity: int) -> Callable[[Sequence[Node]], str]:
@@ -618,7 +624,7 @@ class _Emitter:
 
 
 def _date_part(mask: str) -> str:
-    part = _DATE_PARTS.get(mask.strip().upper())
+    part = date_part(mask)
     if part is None:
         raise ExpressionError(
             f"unsupported date part {mask!r}; supported: "
@@ -655,9 +661,6 @@ def _build_function_table() -> dict[str, Callable[[_Emitter, Sequence[Node]], st
 
 
 _FUNCTIONS = _build_function_table()
-
-#: Informatica functions this module can translate.
-SUPPORTED_FUNCTIONS = frozenset(_FUNCTIONS)
 
 
 def translate(
@@ -758,19 +761,9 @@ def order_variable_ports(
     for port in variables:
         needs.setdefault(port.name, set())
 
-    ordered: list[Port] = []
-    remaining = dict(needs)
-    while remaining:
-        ready = sorted(name for name, deps in remaining.items() if not deps)
-        if not ready:
-            raise ExpressionError(
-                "local variables reference each other in a cycle: "
-                + ", ".join(sorted(remaining))
-            )
-        for name in ready:
-            ordered.append(by_name[name])
-            del remaining[name]
-        for deps in remaining.values():
-            deps.difference_update(ready)
-
-    return tuple(ordered)
+    try:
+        return tuple(by_name[name] for name in dependency_order(needs))
+    except CycleError as cycle:
+        raise ExpressionError(
+            f"local variables reference each other in a cycle: {cycle}"
+        ) from cycle

@@ -148,7 +148,6 @@ def _parse_port(element: ElementTree.Element) -> Port:
         expression_type=_text(element, "EXPRESSIONTYPE") or None,
         group=_text(element, "GROUP") or None,
         ref_field=_text(element, "REF_FIELD") or None,
-        output_group=_text(element, "OUTPUTGROUP") or None,
         is_sort_key=_yes(element, "ISSORTKEY"),
         sort_direction=_text(element, "SORTDIRECTION") or None,
     )

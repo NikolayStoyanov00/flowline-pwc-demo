@@ -348,8 +348,9 @@ class TestStatefulVariableShapes:
         condition would emit row_number() and silently replace every value."""
         from pwc2dbt.sql import SqlError
 
-        with pytest.raises(SqlError, match="only a running count"):
+        with pytest.raises(SqlError, match="only a running count") as raised:
             self._keys(expression)
+        assert why, raised
 
 
 class TestSortDirection:

@@ -16,7 +16,16 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Iterable, Mapping as MappingABC
 
-from .model import Connector, Instance, Kind, Mapping, Repository, Table
+from .model import (
+    Connector,
+    CycleError,
+    Instance,
+    Kind,
+    Mapping,
+    Repository,
+    Table,
+    dependency_order,
+)
 from .naming import layer_for_schema, model_name, schema_from_pre_sql, source_name
 
 __all__ = ["Graph", "GraphError", "ModelPlan", "Read", "build_graph", "plan_models"]
@@ -60,27 +69,14 @@ class Graph:
         Ties are broken by name so that generated SQL is identical run to run.
         """
         subset = set(instance_names)
-        remaining = {
-            name: {f for f in self.feeders(name) if f in subset} for name in subset
-        }
-
-        ordered: list[str] = []
-        while remaining:
-            ready = sorted(
-                name for name, feeders in remaining.items() if not feeders
+        try:
+            return dependency_order(
+                {name: self.feeders(name) & subset for name in subset}
             )
-            if not ready:
-                raise GraphError(
-                    f"{self.mapping_name}: cycle between "
-                    f"{', '.join(sorted(remaining))}"
-                )
-            for name in ready:
-                ordered.append(name)
-                del remaining[name]
-            for feeders in remaining.values():
-                feeders.difference_update(ready)
-
-        return tuple(ordered)
+        except CycleError as cycle:
+            raise GraphError(
+                f"{self.mapping_name}: cycle between {cycle}"
+            ) from cycle
 
 
 def build_graph(mapping: Mapping) -> Graph:
@@ -265,11 +261,7 @@ def _output_ports(mapping: Mapping, instance: Instance) -> tuple[str, ...]:
     transformation = mapping.transformation(instance.definition_name)
     if transformation is None:
         return ()
-    names = [
-        port.name.lower()
-        for port in transformation.ports
-        if port.is_output and not port.is_variable
-    ]
+    names = [port.name.lower() for port in transformation.value_ports]
     return tuple(dict.fromkeys(names))
 
 

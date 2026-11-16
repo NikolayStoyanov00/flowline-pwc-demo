@@ -14,11 +14,14 @@ Semantics follow Informatica's documentation, with two choices worth naming:
 
 from __future__ import annotations
 
+import operator
 from datetime import date, datetime
 from typing import Any, Mapping, Sequence
 
 from ..naming import is_date, is_integer, is_numeric, is_string
 from ..expressions import (
+    date_mask_to_strftime,
+    date_part,
     Binary,
     Call,
     ExpressionError,
@@ -109,37 +112,6 @@ _DATE_PART_SECONDS = {
     "second": 1.0,
 }
 
-_PART_ALIASES = {
-    "D": "day", "DD": "day", "DDD": "day", "J": "day",
-    "HH": "hour", "HH12": "hour", "HH24": "hour",
-    "MI": "minute", "SS": "second",
-    "MM": "month", "MON": "month", "MONTH": "month",
-    "Y": "year", "YY": "year", "YYY": "year", "YYYY": "year",
-}
-
-_MASK = [
-    ("YYYY", "%Y"), ("MONTH", "%B"), ("HH24", "%H"), ("MON", "%b"),
-    ("MM", "%m"), ("DDD", "%j"), ("DD", "%d"), ("YY", "%y"),
-    ("HH", "%I"), ("MI", "%M"), ("SS", "%S"), ("AM", "%p"), ("PM", "%p"),
-]
-
-
-def _strftime_mask(mask: str) -> str:
-    out: list[str] = []
-    position = 0
-    upper = mask.upper()
-    while position < len(mask):
-        for informatica, directive in _MASK:
-            if upper.startswith(informatica, position):
-                out.append(directive)
-                position += len(informatica)
-                break
-        else:
-            out.append(mask[position])
-            position += 1
-    return "".join(out)
-
-
 def _truncate(value: Any, part: str) -> Any:
     moment = _as_datetime(value)
     if moment is None:
@@ -160,6 +132,31 @@ def _truncate(value: Any, part: str) -> Any:
 # ---------------------------------------------------------------------------
 # The evaluator
 # ---------------------------------------------------------------------------
+
+#: Operators whose Python equivalent is a plain binary function. Division is
+#: handled separately because Informatica yields NULL rather than raising.
+_ARITHMETIC = {"+": operator.add, "-": operator.sub, "*": operator.mul}
+
+_COMPARISONS = {
+    "=": operator.eq,
+    "<>": operator.ne,
+    "!=": operator.ne,
+    ">": operator.gt,
+    ">=": operator.ge,
+    "<": operator.lt,
+    "<=": operator.le,
+}
+
+#: One-argument functions that propagate NULL and need no other handling.
+_SCALARS = {
+    "UPPER": lambda v: str(v).upper(),
+    "LOWER": lambda v: str(v).lower(),
+    "LTRIM": lambda v: str(v).lstrip(),
+    "RTRIM": lambda v: str(v).rstrip(),
+    "ABS": abs,
+    "LENGTH": lambda v: len(str(v)),
+}
+
 
 class _Evaluator:
     def __init__(
@@ -234,30 +231,13 @@ class _Evaluator:
 
         if operator == "||":
             return f"{left}{right}"
-        if operator in {"+", "-", "*", "/"}:
-            if operator == "/":
-                if right == 0:
-                    return None
-                return left / right
-            if operator == "+":
-                return left + right
-            if operator == "-":
-                return left - right
-            return left * right
-
-        if operator in {"=", "<>", "!=", ">", ">=", "<", "<="}:
-            left, right = _align(left, right)
-            if operator == "=":
-                return left == right
-            if operator in {"<>", "!="}:
-                return left != right
-            if operator == ">":
-                return left > right
-            if operator == ">=":
-                return left >= right
-            if operator == "<":
-                return left < right
-            return left <= right
+        if operator == "/":
+            # Informatica logs a row error and emits NULL rather than failing.
+            return None if right == 0 else left / right
+        if operator in _ARITHMETIC:
+            return _ARITHMETIC[operator](left, right)
+        if operator in _COMPARISONS:
+            return _COMPARISONS[operator](*_align(left, right))
 
         raise EvalError(f"unsupported operator {operator!r}")
 
@@ -302,33 +282,18 @@ class _Evaluator:
             moment = _as_datetime(self.eval(args[0]))
             if moment is None:
                 return None
-            return moment.strftime(_strftime_mask(str(self.eval(args[1]))))
+            return moment.strftime(date_mask_to_strftime(str(self.eval(args[1]))))
 
         if name == "TO_DATE":
             text = self.eval(args[0])
             if text is None:
                 return None
-            return datetime.strptime(str(text), _strftime_mask(str(self.eval(args[1]))))
+            return datetime.strptime(str(text), date_mask_to_strftime(str(self.eval(args[1]))))
 
-        if name in {"UPPER", "LOWER", "LTRIM", "RTRIM"}:
+        if name in _SCALARS:
+            # All of these take one argument and propagate NULL.
             value = self.eval(args[0])
-            if value is None:
-                return None
-            text = str(value)
-            return {
-                "UPPER": text.upper,
-                "LOWER": text.lower,
-                "LTRIM": text.lstrip,
-                "RTRIM": text.rstrip,
-            }[name]()
-
-        if name == "ABS":
-            value = self.eval(args[0])
-            return None if value is None else abs(value)
-
-        if name == "LENGTH":
-            value = self.eval(args[0])
-            return None if value is None else len(str(value))
+            return None if value is None else _SCALARS[name](value)
 
         if name == "ROUND":
             value = self.eval(args[0])
@@ -368,7 +333,13 @@ def _align(left: Any, right: Any) -> tuple[Any, Any]:
 
 
 def _part(value: Any) -> str:
-    part = _PART_ALIASES.get(str(value).strip().upper())
+    """The date part a mask names.
+
+    The mask tables live in :mod:`pwc2dbt.expressions`. The two
+    implementations are deliberately independent in *behaviour*, but a mask
+    means the same thing on both sides, so the tables are shared.
+    """
+    part = date_part(str(value))
     if part is None:
         raise EvalError(f"unsupported date part {value!r}")
     return part

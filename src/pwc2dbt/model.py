@@ -8,9 +8,37 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import Mapping as MappingABC
+from typing import Iterable, Mapping as MappingABC
 
 EMPTY_ATTRS: MappingABC[str, str] = MappingProxyType({})
+
+
+class CycleError(Exception):
+    """A dependency graph has a cycle, so it cannot be ordered."""
+
+    def __init__(self, names: Iterable[str]) -> None:
+        self.names = tuple(sorted(names))
+        super().__init__(", ".join(self.names))
+
+
+def dependency_order(dependencies: MappingABC[str, set[str]]) -> tuple[str, ...]:
+    """Order names so each comes after everything it depends on.
+
+    Ties break alphabetically, which is what makes generated SQL identical
+    from run to run. Raises :class:`CycleError` naming the names involved.
+    """
+    remaining = {name: set(deps) for name, deps in dependencies.items()}
+    ordered: list[str] = []
+    while remaining:
+        ready = sorted(name for name, deps in remaining.items() if not deps)
+        if not ready:
+            raise CycleError(remaining)
+        for name in ready:
+            ordered.append(name)
+            del remaining[name]
+        for deps in remaining.values():
+            deps.difference_update(ready)
+    return tuple(ordered)
 
 NOT_A_KEY = "NOT A KEY"
 
@@ -84,12 +112,6 @@ class Table:
     connection_name: str = ""
     schema: str = ""
 
-    def column(self, name: str) -> Column | None:
-        for col in self.columns:
-            if col.name == name:
-                return col
-        return None
-
     @property
     def primary_keys(self) -> tuple[Column, ...]:
         return tuple(c for c in self.columns if c.is_primary_key)
@@ -116,7 +138,6 @@ class Port:
     expression_type: str | None = None
     group: str | None = None
     ref_field: str | None = None
-    output_group: str | None = None
     is_sort_key: bool = False
     sort_direction: str | None = None
 
@@ -219,6 +240,33 @@ class Transformation:
     def sort_keys(self) -> tuple[Port, ...]:
         return tuple(p for p in self.ports if p.is_sort_key)
 
+    @property
+    def output_ports(self) -> tuple[Port, ...]:
+        """Ports this step hands to whatever reads it."""
+        return tuple(p for p in self.ports if p.is_output)
+
+    @property
+    def value_ports(self) -> tuple[Port, ...]:
+        """Output ports that are real columns, so not scratch variables."""
+        return tuple(p for p in self.ports if p.is_output and not p.is_variable)
+
+    @property
+    def input_feeds(self) -> dict[str, dict[str, str]]:
+        """Union legs: input group -> {output port: the port feeding it}.
+
+        Inverts ``FIELDDEPENDENCY``, which is how a Union says which leg's
+        column lines up with which output column.
+        """
+        feeds: dict[str, dict[str, str]] = {}
+        for dependency in self.field_dependencies:
+            port = self.port(dependency.input_field)
+            if port is None or port.group is None:
+                continue
+            feeds.setdefault(port.group, {})[dependency.output_field] = (
+                dependency.input_field
+            )
+        return feeds
+
 
 @dataclass(frozen=True, slots=True)
 class Instance:
@@ -316,9 +364,6 @@ class Mapping:
 
     def transformation(self, name: str) -> Transformation | None:
         return self.transformations.get(name)
-
-    def instance(self, name: str) -> Instance | None:
-        return self.instances.get(name)
 
 
 @dataclass(frozen=True, slots=True)

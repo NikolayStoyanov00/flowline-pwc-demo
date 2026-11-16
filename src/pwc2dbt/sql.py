@@ -31,7 +31,7 @@ from .graph import Graph, ModelPlan, build_graph
 from .model import Instance, Kind, Mapping, Port, Repository, Transformation
 from .naming import sql_type
 
-__all__ = ["SqlError", "build_model_sql", "INDENT"]
+__all__ = ["SqlError", "build_model_sql"]
 
 INDENT = "    "
 
@@ -66,12 +66,10 @@ def _select_item(expression: str, alias: str) -> str:
 class _ModelBuilder:
     def __init__(
         self,
-        repo: Repository,
         mapping: Mapping,
         graph: Graph,
         plan: ModelPlan,
     ) -> None:
-        self.repo = repo
         self.mapping = mapping
         self.graph = graph
         self.plan = plan
@@ -624,15 +622,7 @@ class _ModelBuilder:
         inputs = self.inputs_of(instance)
         name = _cte_name(instance.name)
 
-        # Output port -> the input port feeding it, per input group.
-        feeds: dict[str, dict[str, str]] = {}
-        for dependency in transformation.field_dependencies:
-            port = transformation.port(dependency.input_field)
-            if port is None or port.group is None:
-                continue
-            feeds.setdefault(port.group, {})[dependency.output_field] = (
-                dependency.input_field
-            )
+        feeds = transformation.input_feeds
 
         outputs = [
             port.name
@@ -914,7 +904,7 @@ def build_model_sql(repo: Repository, plan: ModelPlan) -> str:
     mapping = repo.mapping(plan.mapping_name)
     if mapping is None:
         raise SqlError(f"no mapping called {plan.mapping_name!r}")
-    builder = _ModelBuilder(repo, mapping, build_graph(mapping), plan)
+    builder = _ModelBuilder(mapping, build_graph(mapping), plan)
     try:
         return builder.build()
     except ExpressionError as exc:

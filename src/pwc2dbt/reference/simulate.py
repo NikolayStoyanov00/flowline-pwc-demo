@@ -37,7 +37,17 @@ from ..expressions import (
 )
 from ..graph import build_graph
 from ..naming import is_numeric, is_string
-from ..model import Connector, Instance, Kind, Mapping, Port, Repository, Transformation
+from ..model import (
+    Connector,
+    CycleError,
+    Instance,
+    Kind,
+    Mapping,
+    Port,
+    Repository,
+    Transformation,
+    dependency_order,
+)
 
 __all__ = ["SimulationError", "Result", "run_repository", "load_seeds", "VariableOrder"]
 
@@ -215,7 +225,7 @@ class _MappingRun:
     def run_passthrough(self, instance: Instance) -> Grouped:
         """Source Qualifier: carries its input forward under the port names."""
         transformation = self.definition(instance)
-        wanted = [p.name for p in transformation.ports if p.is_output]
+        wanted = [p.name for p in transformation.output_ports]
         return {
             "": [
                 {name: row.get(name) for name in wanted}
@@ -242,9 +252,7 @@ class _MappingRun:
         else:
             variables = declared
 
-        outputs = [
-            p for p in transformation.ports if p.is_output and not p.is_variable
-        ]
+        outputs = list(transformation.value_ports)
 
         # Variables keep their value from one row to the next, and start at
         # their datatype's default so the first row has something to read.
@@ -292,7 +300,7 @@ class _MappingRun:
                 for row in rows
                 if evaluate(tree, row, parameters=self.parameters) is True
             ]
-        wanted = [p.name for p in transformation.ports if p.is_output]
+        wanted = [p.name for p in transformation.output_ports]
         return {"": [{name: row.get(name) for name in wanted} for row in rows]}
 
     def run_sorter(self, instance: Instance) -> Grouped:
@@ -330,7 +338,7 @@ class _MappingRun:
                         reverse=True,
                     )
 
-        wanted = [p.name for p in transformation.ports if p.is_output]
+        wanted = [p.name for p in transformation.output_ports]
         return {"": [{name: row.get(name) for name in wanted} for row in rows]}
 
     def run_aggregator(self, instance: Instance) -> Grouped:
@@ -370,7 +378,9 @@ class _MappingRun:
             return members[-1].get(port.name)
         tree = self.tree(port.expression)
         if isinstance(tree, Call) and tree.name in AGGREGATES:
-            if tree.name == "COUNT" and tree.arguments and _is_star(tree.arguments[0]):
+            if tree.name == "COUNT" and tree.arguments and isinstance(
+                tree.arguments[0], Star
+            ):
                 return len(members)
             inner = tree.arguments[0]
             condition = tree.arguments[1] if len(tree.arguments) > 1 else None
@@ -428,7 +438,7 @@ class _MappingRun:
                 tuple(row.get(master_port) for _, master_port in pairs), []
             ).append(row)
 
-        wanted = [p.name for p in transformation.ports if p.is_output]
+        wanted = [p.name for p in transformation.output_ports]
         produced: list[dict] = []
         matched_master: set[int] = set()
 
@@ -488,15 +498,7 @@ class _MappingRun:
             and p.group in {g.name for g in transformation.output_groups}
         ]
 
-        # Output port -> the input port feeding it, for each input leg.
-        feeds_by_group: dict[str, dict[str, str]] = {}
-        for dependency in transformation.field_dependencies:
-            port = transformation.port(dependency.input_field)
-            if port is None or port.group is None:
-                continue
-            feeds_by_group.setdefault(port.group, {})[dependency.output_field] = (
-                dependency.input_field
-            )
+        feeds_by_group = transformation.input_feeds
 
         produced: list[dict] = []
         for origin, group, connectors in self.feeds(instance):
@@ -599,11 +601,6 @@ def _orderable(value: Any) -> Any:
     return str(value)
 
 
-def _is_star(node: Node) -> bool:
-
-    return isinstance(node, Star)
-
-
 def _merge(master: MappingABC, detail: MappingABC, wanted: Iterable[str]) -> dict:
     return {
         name: detail[name] if name in detail else master.get(name)
@@ -698,22 +695,20 @@ def _mapping_order(repo: Repository) -> list[Mapping]:
         mapping.name: {i.definition_name for i in mapping.source_instances}
         for mapping in repo.mappings
     }
+    # A mapping depends on any other mapping that writes a table it reads.
+    depends = {
+        name: {
+            other
+            for other in writes
+            if other != name and reads[name] & writes[other]
+        }
+        for name in writes
+    }
 
-    remaining = {m.name: m for m in repo.mappings}
-    ordered: list[Mapping] = []
-    while remaining:
-        ready = [
-            name
-            for name in remaining
-            if not any(
-                reads[name] & writes[other] for other in remaining if other != name
-            )
-        ]
-        if not ready:
-            raise SimulationError(
-                "mappings read each other's targets in a cycle: "
-                + ", ".join(sorted(remaining))
-            )
-        for name in sorted(ready):
-            ordered.append(remaining.pop(name))
-    return ordered
+    by_name = {mapping.name: mapping for mapping in repo.mappings}
+    try:
+        return [by_name[name] for name in dependency_order(depends)]
+    except CycleError as cycle:
+        raise SimulationError(
+            f"mappings read each other's targets in a cycle: {cycle}"
+        ) from cycle

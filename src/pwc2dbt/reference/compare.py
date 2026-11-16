@@ -77,7 +77,6 @@ class TableDiff:
     name: str
     simulated_rows: int
     dbt_rows: int
-    columns: tuple[str, ...] = ()
     missing_columns: tuple[str, ...] = ()
     key: str | None = None
     #: Keys present on one side only.
@@ -153,7 +152,6 @@ def compare_tables(
         name=name,
         simulated_rows=len(simulated),
         dbt_rows=len(from_dbt),
-        columns=tuple(columns),
     )
 
     if from_dbt:
