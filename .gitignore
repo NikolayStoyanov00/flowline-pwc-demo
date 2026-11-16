@@ -20,3 +20,7 @@ logs/
 
 # debugger scratch output
 .debug-out/
+
+# PyCharm: keep the shared run configurations, ignore the rest
+.idea/*
+!.idea/runConfigurations/
