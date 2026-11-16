@@ -143,7 +143,7 @@ def _render_plan(repo: Repository, verbose: bool) -> str:
                 out.append(f"    ref()    : {', '.join(plan.depends_on)}")
             if plan.boundaries:
                 out.append(
-                    f"    reuses   : "
+                    "    reuses   : "
                     + ", ".join(f"{k} -> {v}" for k, v in plan.boundaries.items())
                 )
             out.extend(_render_chain(plan, verbose))

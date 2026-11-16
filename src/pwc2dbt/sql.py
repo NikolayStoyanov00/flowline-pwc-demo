@@ -20,14 +20,13 @@ from .expressions import (
     Call,
     Unary,
     ExpressionError,
-    Number,
     Reference,
     order_variable_ports,
     parse_expression,
     stateful_variable_ports,
     translate,
 )
-from .graph import Graph, ModelPlan, Read, build_graph
+from .graph import Graph, ModelPlan, build_graph
 from .naming import sql_type
 from .model import Instance, Kind, Mapping, Port, Repository, Transformation
 
@@ -602,7 +601,7 @@ class _ModelBuilder:
             cte = inputs[leg_fields[0]].cte
             items = [
                 _select_item(inputs[field].name, out.lower())
-                for out, field in zip(outputs, leg_fields)
+                for out, field in zip(outputs, leg_fields, strict=True)
             ]
             branches.append(_select(items, cte, note=f"union leg {group.name}"))
 

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .graph import ModelPlan, build_graph, plan_models
 from .model import Kind, Repository, Table, Transformation
-from .naming import model_name, source_name
+from .naming import source_name
 from .sql import build_model_sql
 
 __all__ = ["EmitResult", "write_project"]
@@ -121,11 +121,7 @@ def _changes_grain(plan: ModelPlan) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _yaml_list(values: list[str]) -> str:
-    return "[" + ", ".join(f"'{v}'" for v in values) + "]"
-
-
-def _source_yaml(repo: Repository, raw_tables: list[Table]) -> str:
+def _source_yaml(raw_tables: list[Table]) -> str:
     by_schema: dict[str, list[Table]] = {}
     for table in raw_tables:
         by_schema.setdefault(table.schema, []).append(table)
@@ -339,7 +335,7 @@ def write_project(
     raw_tables = [
         table for table in repo.sources.values() if table.name not in model_tables
     ]
-    write("models/staging/__sources.yml", _source_yaml(repo, raw_tables))
+    write("models/staging/__sources.yml", _source_yaml(raw_tables))
 
     for plan in plans:
         write(f"models/{plan.layer}/{plan.name}.sql", build_model_sql(repo, plan))

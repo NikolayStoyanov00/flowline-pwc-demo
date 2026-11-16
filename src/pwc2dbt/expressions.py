@@ -649,7 +649,8 @@ def _build_function_table() -> dict[str, Callable[[_Emitter, Sequence[Node]], st
             lambda e, a, sql_name=sql_name, arity=arity: e.simple(sql_name, arity)(a)
         )
     for name in ("SUM", "COUNT", "MIN", "MAX", "AVG"):
-        table[name] = lambda e, a, sql_name=name.lower(): e.aggregate(sql_name)(a)
+        sql_name = name.lower()
+        table[name] = lambda e, a, sql_name=sql_name: e.aggregate(sql_name)(a)
     return table
 
 

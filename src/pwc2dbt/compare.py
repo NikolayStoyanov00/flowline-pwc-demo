@@ -235,7 +235,7 @@ def _read_dbt_tables(
                 continue
             cursor = connection.execute(f'select * from "{name.lower()}"')
             headers = [d[0] for d in cursor.description]
-            tables[name] = [dict(zip(headers, row)) for row in cursor.fetchall()]
+            tables[name] = [dict(zip(headers, row, strict=True)) for row in cursor.fetchall()]
         return tables
     finally:
         connection.close()

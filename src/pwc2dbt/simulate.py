@@ -29,7 +29,6 @@ from .evaluate import AGGREGATES, EvalError, aggregate, coerce, evaluate
 from .expressions import (
     Call,
     Node,
-    order_variable_ports,
     parse_expression,
     stateful_variable_ports,
 )
@@ -336,7 +335,7 @@ class _MappingRun:
         produced = []
         for key, members in groups.items():
             out: dict[str, Any] = {
-                port.name: value for port, value in zip(group_ports, key)
+                port.name: value for port, value in zip(group_ports, key, strict=True)
             }
             for port in value_ports:
                 out[port.name] = self.aggregate_port(port, members)

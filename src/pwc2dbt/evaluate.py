@@ -14,7 +14,7 @@ Semantics follow Informatica's documentation, with two choices worth naming:
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any, Mapping, Sequence
 
 from .expressions import (
