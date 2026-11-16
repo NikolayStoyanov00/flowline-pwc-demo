@@ -144,13 +144,29 @@ python -m pwc2dbt convert tests/fixtures/minimal.xml --out /tmp/min
 cat /tmp/min/models/staging/stg_items.sql
 ```
 
-Then set **three breakpoints** and run that same command:
+Then set these breakpoints and debug it.
 
 | Breakpoint | What to look at |
 |---|---|
-| `parse.py:_parse_mapping` | `transformations`, `instances`, `connectors` — the XML as objects |
-| `graph.py:_plan` | `step_names` and the order `topological_order` puts them in |
-| `sql.py:_ModelBuilder.build` | step into each `emit_*`, and watch `self.columns` fill up |
+| `parse.py:230` `_parse_mapping` | `transformations`, `instances`, `connectors` — the XML as objects |
+| `graph.py:306` `_plan` | `step_names`, and the order `topological_order` puts them in |
+| `sql.py:700` `_ModelBuilder.build` | step into each `emit_*` in turn |
+| `sql.py:98` `register` | watch `self.columns` fill up — this is the core |
+
+**VS Code:** configurations are committed in `.vscode/launch.json`. Open Run and
+Debug (`Ctrl+Shift+D`), pick **"convert: minimal.xml (start here)"**, press F5.
+If the interpreter is wrong, `Ctrl+Shift+P` → *Python: Select Interpreter* →
+`.venv\Scripts\python.exe`.
+
+**PyCharm:** Run → Edit Configurations → `+` → Python, then set
+
+- **Module name** (switch from *Script path* using the dropdown): `pwc2dbt`
+- **Parameters**: `convert tests/fixtures/minimal.xml --out .debug-out`
+- **Working directory**: the repo root
+- **Interpreter**: `.venv\Scripts\python.exe` (Settings → Project → Python
+  Interpreter → Add → Existing if it is not listed)
+
+Then Run → Debug.
 
 That third one is the core of the project. `self.columns` is the
 `(step, port) → (CTE, column)` lookup; watching it grow as each CTE is emitted

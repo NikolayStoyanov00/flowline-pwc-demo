@@ -17,3 +17,6 @@ logs/
 *.duckdb.wal
 .user.yml
 .reference/
+
+# debugger scratch output
+.debug-out/

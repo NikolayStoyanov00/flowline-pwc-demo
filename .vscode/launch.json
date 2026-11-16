@@ -1,0 +1,75 @@
+{
+  // Debug configurations for walking the converter through.
+  //
+  // Pick one in Run and Debug (Ctrl+Shift+D), then F5. Set breakpoints first:
+  //   parse.py:230   _parse_mapping          the XML as objects
+  //   graph.py:306   _plan                   which models, and step order
+  //   sql.py:700     _ModelBuilder.build     the core: steps -> CTEs
+  //   sql.py:98      register                watch self.columns fill up
+  //
+  // "justMyCode": false lets you step into dbt/duckdb if you want to; set it
+  // true to stay inside this project.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "convert: minimal.xml (start here)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pwc2dbt",
+      "args": [
+        "convert",
+        "tests/fixtures/minimal.xml",
+        "--out",
+        "${workspaceFolder}/.debug-out"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "convert: the real export",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pwc2dbt",
+      "args": [
+        "convert",
+        "FLOWLINE_DEMO_JAFFLESHOP.xml",
+        "--out",
+        "${workspaceFolder}/.debug-out"
+      ],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "plan: the real export (verbose)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pwc2dbt",
+      "args": ["plan", "FLOWLINE_DEMO_JAFFLESHOP.xml", "--verbose"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "expressions: the real export",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pwc2dbt",
+      "args": ["expressions", "FLOWLINE_DEMO_JAFFLESHOP.xml"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "pytest: one test file",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["tests/test_sql.py", "-x", "-q"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}
