@@ -390,3 +390,41 @@ class TestSortDirection:
         # this from matching "description".
         for name, sql in models.items():
             assert not re.search(r"\bdesc\b", sql), name
+
+
+class TestMinimalFixture:
+    """`tests/fixtures/minimal.xml` exists so the whole pipeline can be walked
+    through in a debugger: 4 steps and 10 connectors instead of 142 and 1,066.
+
+    It is in the test suite so it cannot rot.
+    """
+
+    @staticmethod
+    def _model() -> str:
+        from pathlib import Path
+
+        from pwc2dbt.parse import parse_file
+
+        path = Path(__file__).parent / "fixtures" / "minimal.xml"
+        repo = parse_file(path)
+        plans = plan_models(repo)
+        assert len(plans) == 1
+        return build_model_sql(repo, plans[0])
+
+    def test_it_converts_to_one_model(self) -> None:
+        assert "select * from final" in self._model()
+
+    def test_it_exercises_every_part_of_the_pipeline(self) -> None:
+        sql = self._model()
+        # source cast, rename, local variable, IIF, target projection
+        assert "cast(qty as double) as qty" in sql
+        assert "from {{ source('raw', 'RAW_ITEMS') }}" in sql
+        assert "id as item_id" in sql
+        assert "case when qty is null then 0 else qty end" in sql
+        assert "> 10 then 1 else 0 end as is_bulk" in sql
+
+    def test_it_shows_the_inlined_variable_limitation(self) -> None:
+        """v_QTY is read by two outputs, so its SQL appears twice. That is the
+        documented cost of inlining local variables."""
+        sql = self._model()
+        assert sql.count("case when qty is null then 0 else qty end") == 2

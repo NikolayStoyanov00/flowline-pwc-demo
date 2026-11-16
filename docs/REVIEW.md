@@ -132,16 +132,41 @@ and the second implementation. `git checkout src/pwc2dbt/sql.py` to revert.
 | `emit.py` | 360 | the dbt project; `trace_column` attaches tests by lineage |
 | `evaluate/simulate/compare` | 1,400 | the second implementation; skim |
 
-**Don't step through it line by line** — the CLI already prints the intermediate
-state, which is faster than a debugger:
+### Walking it through in a debugger
+
+Worth doing once, but not on the real export — 142 instances and 1,066
+connectors is too much to follow. Use the tiny fixture instead: one source, one
+target, four steps, ten connectors, one model, and it still exercises every
+part of the pipeline.
+
+```bash
+python -m pwc2dbt convert tests/fixtures/minimal.xml --out /tmp/min
+cat /tmp/min/models/staging/stg_items.sql
+```
+
+Then set **three breakpoints** and run that same command:
+
+| Breakpoint | What to look at |
+|---|---|
+| `parse.py:_parse_mapping` | `transformations`, `instances`, `connectors` — the XML as objects |
+| `graph.py:_plan` | `step_names` and the order `topological_order` puts them in |
+| `sql.py:_ModelBuilder.build` | step into each `emit_*`, and watch `self.columns` fill up |
+
+That third one is the core of the project. `self.columns` is the
+`(step, port) → (CTE, column)` lookup; watching it grow as each CTE is emitted
+is the clearest way to see why renames work without matching names.
+
+The fixture also shows a documented limitation in miniature: `v_QTY` is read by
+two output ports, so its SQL appears twice in the generated model. That is the
+cost of inlining local variables.
+
+For the real export, the CLI prints the same intermediate state faster than
+stepping:
 
 ```bash
 python -m pwc2dbt plan FLOWLINE_DEMO_JAFFLESHOP.xml --verbose   # every step of every model
 python -m pwc2dbt expressions FLOWLINE_DEMO_JAFFLESHOP.xml      # all 205 expressions -> SQL
 ```
-
-If you do want a debugger, three breakpoints cover the whole flow:
-`parse.py:_parse_mapping`, `graph.py:_plan`, `sql.py:_ModelBuilder.build`.
 
 ### Five places to look hardest
 
