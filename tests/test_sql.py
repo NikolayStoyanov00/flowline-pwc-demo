@@ -24,8 +24,7 @@ def models(repo) -> dict[str, str]:
 def _jinja_free(sql: str) -> str:
     """Replace dbt's Jinja with plain SQL so a parser can read it."""
     sql = re.sub(r"'\{\{ var\([^)]*\) \}\}'", "current_date", sql)
-    sql = re.sub(r"\{\{ (?:ref|source)\([^)]*\) \}\}", "some_table", sql)
-    return sql
+    return re.sub(r"\{\{ (?:ref|source)\([^)]*\) \}\}", "some_table", sql)
 
 
 def _cte_body(sql: str, name: str) -> str:
@@ -158,7 +157,7 @@ class TestRouterAndUnion:
     def test_union_columns_line_up_across_legs(self, models) -> None:
         """Alignment comes from FIELDDEPENDENCY, not from column order."""
         body = _cte_body(models["stg_locations"], "un_regions")
-        legs = [leg for leg in body.split("union all")]
+        legs = body.split("union all")
         aliases = [
             re.findall(r"^\s{8}(\w+)(?: as (\w+))?,?$", leg, re.M) for leg in legs
         ]
