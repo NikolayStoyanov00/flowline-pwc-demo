@@ -89,9 +89,8 @@ class TableDiff:
     examples: list[tuple[Any, str, Any, Any]] = field(default_factory=list)
     #: How the comparison was done, when that is worth saying.
     note: str = ""
-    #: False when the table is absent from the dbt database, i.e. there was
-    #: nothing to compare. Without this a missing table whose reference side
-    #: is also empty would report OK and exit 0.
+    #: False when the table is absent from the dbt database. Distinct from an
+    #: empty table: nothing was compared, so the result is not a match.
     present: bool = True
 
     @property

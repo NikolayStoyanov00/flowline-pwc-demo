@@ -251,7 +251,7 @@ class Instance:
 class Connector:
     """A single column flowing from one step to the next: ``x.a AS b``.
 
-    One per column pair, which is why 142 instances need 1,066 connectors.
+    There is one per column pair, so a step with ten columns has ten of them.
     Column renames happen here, so the wires must be followed rather than
     matching names between steps.
     """

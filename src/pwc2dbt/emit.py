@@ -33,7 +33,7 @@ class EmitResult:
 
 
 # ---------------------------------------------------------------------------
-# Column lineage, used to put tests on the right model column
+# Column lineage, for attaching tests to the right model column
 # ---------------------------------------------------------------------------
 
 
@@ -268,9 +268,8 @@ def _vars_block(repo: Repository) -> str:
 
 
 def _dbt_project_yml(name: str) -> str:
-    # Layers come from one table, so a layer cannot have a directory here and
-    # no materialization — which is what left the promoted shared models as
-    # views, re-executed once per consumer. See naming.LAYERS.
+    # Driven by naming.LAYERS so a layer cannot be given a directory here
+    # without a materialization.
     layers = "\n".join(
         f"    {layer.directory}:\n      +materialized: {layer.materialized}"
         for layer in LAYERS
@@ -331,10 +330,8 @@ def write_project(
         path.write_text(content, encoding="utf-8")
         written.append(path)
 
-    # Named after the output directory, falling back to the PowerCenter
-    # folder. It used to be the constant "jaffle_converted", so converting a
-    # second export produced a second project with the same name, the same
-    # profile and the same DuckDB filename as the first.
+    # Derived, not fixed: two exports converted side by side need different
+    # project names, profiles and database files.
     name = (
         project_name(out_dir.name)
         or project_name(repo.folder_name)

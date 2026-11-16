@@ -355,9 +355,9 @@ def _plan(
 def plan_models(repo: Repository, *, extract_forks: bool = True) -> tuple[ModelPlan, ...]:
     """Work out every dbt model this export produces.
 
-    One model per target, plus one per fork when ``extract_forks`` is set. In
-    the enriched mapping the five targets share 33 upstream steps; without the
-    extra models each of those steps would be copied into up to five files.
+    One model per target, plus one per fork when ``extract_forks`` is set.
+    Targets in the same mapping often share a long upstream chain; without the
+    extra models that chain is copied into every consumer.
     """
     plans: list[ModelPlan] = []
 

@@ -29,21 +29,19 @@ _TRUNCATE = re.compile(
 class Layer:
     """A dbt model subdirectory and how its models are materialized.
 
-    Kept together because the two decisions belong to each other: they used to
-    live in different modules, and `intermediate` had a directory but no
-    materialization, so the promoted shared models defaulted to views and were
-    re-executed once per consumer — the opposite of the reason for promoting
-    them.
+    The two belong together: a layer with a directory but no materialization
+    silently falls back to a view, and a shared model built as a view is
+    re-executed once per consumer.
     """
 
     directory: str
     materialized: str
 
 
-#: Staging is a view so consumers always read fresh source data, per dbt's own
-#: convention. Marts are tables because every PowerCenter target was loaded
-#: truncate-and-insert. Intermediates are tables because their whole purpose is
-#: to compute shared work once for up to five consumers.
+#: Staging is a view so consumers always read fresh source data, per dbt
+#: convention. Marts are tables because every PowerCenter target is loaded
+#: truncate-and-insert. Intermediates are tables so the work they hold is
+#: computed once rather than once per consumer.
 STAGING = Layer("staging", "view")
 INTERMEDIATE = Layer("intermediate", "table")
 MARTS = Layer("marts", "table")
@@ -96,11 +94,11 @@ def source_name(schema: str) -> str:
     return schema.strip().lower()
 
 
-# PowerCenter datatype names, grouped once. Several modules need to ask "is
+# PowerCenter datatype names, grouped in one place. Several modules ask "is
 # this a string?" — the SQL emitter to decide a cast and an IIF fallback, the
 # evaluator to parse a CSV value, the reference run to initialise a variable.
-# Keeping the groups here means those answers cannot drift apart, which they
-# had: `datetime`, `float` and `nstring` were each known to some callers only.
+# They have to agree: whether PERISHABLE is a string decides whether
+# `PERISHABLE = 'Y'` is a string comparison.
 _TEXT_TYPES = frozenset(
     {"varchar2", "varchar", "char", "nchar", "nvarchar2", "string", "nstring", "text"}
 )

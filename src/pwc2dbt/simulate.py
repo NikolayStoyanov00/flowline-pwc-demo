@@ -205,8 +205,8 @@ class _MappingRun:
             raise SimulationError(
                 f"no data supplied for source {instance.definition_name!r}"
             )
-        # No copy: every consumer goes through rows_from, which builds a
-        # fresh projected dict per row, and nothing mutates these.
+        # Not copied: consumers read these through rows_from, which builds a
+        # fresh dict per row, and nothing mutates them in place.
         return {"": list(rows)}
 
     def run_passthrough(self, instance: Instance) -> Grouped:
