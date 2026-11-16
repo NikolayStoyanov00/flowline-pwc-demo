@@ -14,13 +14,14 @@ from __future__ import annotations
 import argparse
 import sys
 from collections import Counter
+from collections.abc import Sequence
 from pathlib import Path
 
 from .reference.compare import CompareError, compare as compare_outputs
 from .emit import write_project
 from .expressions import ExpressionError, translate
 from .graph import ModelPlan, plan_models, split_points, unsupported_steps
-from .model import Kind, Repository, Transformation
+from .model import Kind, Mapping, Repository, Transformation
 from .parse import ParseError, parse_file
 from .reference.simulate import SimulationError, VariableOrder
 from .sql import SqlError
@@ -113,69 +114,75 @@ def _render_chain(plan: ModelPlan, verbose: bool) -> list[str]:
     return lines
 
 
+def _render_model(plan: ModelPlan, verbose: bool) -> list[str]:
+    out = [f"\n  {plan.path}"]
+    label = "shared" if plan.is_intermediate else "target"
+    out.append(f"    {label:<9}: {plan.leaf.name} ({plan.schema or '-'})")
+    out.append(f"    reads    : {len(plan.reads)} table read(s)")
+    for read in plan.reads:
+        # The instance name is shown because one table is often read more than
+        # once in a mapping, as separate graph nodes.
+        alias = (
+            ""
+            if read.instance_name == read.table.name
+            else f" (as {read.instance_name})"
+        )
+        kind = "model " if read.is_model else "source"
+        out.append(f"      {kind} {read.table.name}{alias}")
+
+    if plan.depends_on:
+        out.append(f"    ref()    : {', '.join(plan.depends_on)}")
+    if plan.boundaries:
+        out.append(
+            "    reuses   : "
+            + ", ".join(f"{k} -> {v}" for k, v in plan.boundaries.items())
+        )
+    out.extend(_render_chain(plan, verbose))
+
+    blocked = unsupported_steps(plan)
+    if blocked:
+        out.append(f"    BLOCKED  : unsupported steps {', '.join(blocked)}")
+    return out
+
+
+def _render_forks(mapping: Mapping, plans: Sequence[ModelPlan]) -> list[str]:
+    """Where a mapping's pipelines diverge, and how much sits above them."""
+    forks = split_points(mapping)
+    if not forks:
+        return []
+
+    shared = len({name for plan in plans for name in plan.shared_steps})
+    out = [
+        _heading(f"{mapping.name}: where pipelines fork"),
+        f"  {shared} step(s) feed more than one model, but they all sit "
+        f"upstream of {len(forks)} fork(s):",
+    ]
+    for name, targets in sorted(forks.items()):
+        out.append(
+            f"      {name:<24} -> {len(targets)} targets: {', '.join(targets)}"
+        )
+    return out
+
+
 def _render_plan(repo: Repository, verbose: bool) -> str:
     plans = plan_models(repo)
-    out: list[str] = []
 
     by_mapping: dict[str, list[ModelPlan]] = {}
     for plan in plans:
         by_mapping.setdefault(plan.mapping_name, []).append(plan)
 
+    out: list[str] = []
     for mapping_name, mapping_plans in by_mapping.items():
-        out.append(
-            _heading(f"{mapping_name}  ->  {len(mapping_plans)} model(s)")
-        )
+        out.append(_heading(f"{mapping_name}  ->  {len(mapping_plans)} model(s)"))
         for plan in mapping_plans:
-            out.append(f"\n  {plan.path}")
-            label = "shared" if plan.is_intermediate else "target"
-            out.append(f"    {label:<9}: {plan.leaf.name} ({plan.schema or '-'})")
-            out.append(f"    reads    : {len(plan.reads)} table read(s)")
-            for read in plan.reads:
-                # The instance name is shown because one table is often read
-                # more than once in a mapping, as separate graph nodes.
-                alias = (
-                    "" if read.instance_name == read.table.name
-                    else f" (as {read.instance_name})"
-                )
-                kind = "model " if read.is_model else "source"
-                out.append(f"      {kind} {read.table.name}{alias}")
-            if plan.depends_on:
-                out.append(f"    ref()    : {', '.join(plan.depends_on)}")
-            if plan.boundaries:
-                out.append(
-                    "    reuses   : "
-                    + ", ".join(f"{k} -> {v}" for k, v in plan.boundaries.items())
-                )
-            out.extend(_render_chain(plan, verbose))
-
-            blocked = unsupported_steps(plan)
-            if blocked:
-                out.append(f"    BLOCKED  : unsupported steps {', '.join(blocked)}")
+            out.extend(_render_model(plan, verbose))
 
     for mapping in repo.mappings:
-        forks = split_points(mapping)
-        if not forks:
-            continue
-        shared = len(
-            {
-                name
-                for plan in plans
-                if plan.mapping_name == mapping.name
-                for name in plan.shared_steps
-            }
-        )
-        out.append(_heading(f"{mapping.name}: where pipelines fork"))
-        out.append(
-            f"  {shared} step(s) feed more than one model, but they all sit "
-            f"upstream of {len(forks)} fork(s):"
-        )
-        for name, targets in sorted(forks.items()):
-            out.append(f"      {name:<24} -> {len(targets)} targets: {', '.join(targets)}")
+        out.extend(_render_forks(mapping, by_mapping.get(mapping.name, [])))
 
     out.append(_heading("totals"))
     out.append(f"  models : {len(plans)}")
-    layers = Counter(p.layer for p in plans)
-    for layer, count in sorted(layers.items()):
+    for layer, count in sorted(Counter(p.layer for p in plans).items()):
         out.append(f"  {layer:<8}: {count}")
 
     return "\n".join(out)
@@ -308,15 +315,17 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    inspect = subparsers.add_parser(
-        "inspect", help="report what the parser found in an export"
-    )
-    inspect.add_argument("xml", type=Path, help="path to the PowerCenter export XML")
+    def command(name: str, help: str) -> argparse.ArgumentParser:
+        """A subcommand, with the export path every one of them takes."""
+        sub = subparsers.add_parser(name, help=help)
+        sub.add_argument("xml", type=Path, help="path to the PowerCenter export XML")
+        return sub
 
-    plan = subparsers.add_parser(
-        "plan", help="list the dbt models an export produces, and what feeds them"
+    command("inspect", "report what the parser found in an export")
+
+    plan = command(
+        "plan", "list the dbt models an export produces, and what feeds them"
     )
-    plan.add_argument("xml", type=Path, help="path to the PowerCenter export XML")
     plan.add_argument(
         "-v",
         "--verbose",
@@ -324,21 +333,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="list every step of every model rather than a summary",
     )
 
-    expressions = subparsers.add_parser(
-        "expressions",
-        help="translate every Informatica expression in an export into SQL",
+    expressions = command(
+        "expressions", "translate every Informatica expression in an export into SQL"
     )
-    expressions.add_argument("xml", type=Path, help="path to the PowerCenter export XML")
     expressions.add_argument(
         "--only",
         choices=["port", "variable", "router group", "filter", "join"],
         help="show only expressions from one place",
     )
 
-    convert = subparsers.add_parser(
-        "convert", help="write a runnable dbt project from an export"
-    )
-    convert.add_argument("xml", type=Path, help="path to the PowerCenter export XML")
+    convert = command("convert", "write a runnable dbt project from an export")
     convert.add_argument(
         "--out",
         type=Path,
@@ -352,11 +356,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="directory of seed CSVs to copy in (default: seeds/jaffle)",
     )
 
-    compare_cmd = subparsers.add_parser(
-        "compare",
-        help="run the mapping row by row and diff the result against dbt's",
+    compare_cmd = command(
+        "compare", "run the mapping row by row and diff the result against dbt's"
     )
-    compare_cmd.add_argument("xml", type=Path, help="path to the PowerCenter export XML")
     compare_cmd.add_argument(
         "--seeds",
         type=Path,

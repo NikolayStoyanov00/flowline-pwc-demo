@@ -18,7 +18,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from enum import Enum, auto
-from typing import Callable, Iterable, Mapping as MappingABC, Sequence
+from collections.abc import Callable, Iterable, Mapping as MappingABC, Sequence
 
 from .model import CycleError, Port, dependency_order
 from .naming import is_date, is_string

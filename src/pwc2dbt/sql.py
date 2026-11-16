@@ -13,7 +13,7 @@ connectors, never from the column happening to be called the same thing.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Iterable
+from collections.abc import Callable, Iterable
 
 from .expressions import (
     Binary,
@@ -650,7 +650,7 @@ class _ModelBuilder:
                 f"{self.mapping.name}: {instance.name} has no connected input groups"
             )
 
-        self.add_cte(name, "\n\n{}union all\n\n".format(INDENT).join(branches))
+        self.add_cte(name, f"\n\n{INDENT}union all\n\n".join(branches))
         for out in outputs:
             self.register(instance.name, out, Column(name, out.lower()))
 

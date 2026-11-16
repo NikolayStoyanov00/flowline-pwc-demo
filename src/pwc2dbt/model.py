@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import Iterable, Mapping as MappingABC
+from collections.abc import Iterable, Mapping as MappingABC
 
 EMPTY_ATTRS: MappingABC[str, str] = MappingProxyType({})
 
@@ -59,7 +59,7 @@ class Kind(str, Enum):
     UNKNOWN = "Unknown"
 
     @classmethod
-    def classify(cls, type_attr: str, template_name: str | None = None) -> "Kind":
+    def classify(cls, type_attr: str, template_name: str | None = None) -> Kind:
         """Normalise a raw ``TYPE`` attribute.
 
         A Union is exported as ``TYPE="Custom Transformation"`` and is only

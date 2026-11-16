@@ -23,7 +23,8 @@ import csv
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping as MappingABC, Sequence
+from typing import Any
+from collections.abc import Iterable, Mapping as MappingABC, Sequence
 
 from .evaluate import AGGREGATES, EvalError, aggregate, coerce, evaluate
 from ..expressions import (

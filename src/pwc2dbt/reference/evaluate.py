@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import operator
 from datetime import date, datetime
-from typing import Any, Mapping, Sequence
+from typing import Any
+from collections.abc import Mapping, Sequence
 
 from ..naming import is_date, is_integer, is_numeric, is_string
 from ..expressions import (

@@ -15,7 +15,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from math import isclose
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any
+from collections.abc import Mapping, Sequence
 
 from ..model import Repository
 from .simulate import Result, VariableOrder, load_seeds, run_repository

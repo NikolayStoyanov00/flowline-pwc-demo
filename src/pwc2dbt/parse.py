@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping as MappingABC
+from collections.abc import Mapping as MappingABC
 from xml.etree import ElementTree
 
 from .model import (

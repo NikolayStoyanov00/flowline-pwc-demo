@@ -53,11 +53,7 @@ def _carried_through(transformation: Transformation | None, field: str) -> list[
     for port in transformation.ports:
         if not port.is_output or port.is_variable:
             continue
-        if port.name == field:
-            carried.append(port.name)
-        elif port.ref_field == field:
-            carried.append(port.name)
-        elif port.expression and port.expression.strip() == field:
+        if port.name == field or port.ref_field == field or port.expression and port.expression.strip() == field:
             carried.append(port.name)
 
     for dependency in transformation.field_dependencies:

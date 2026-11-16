@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections import defaultdict
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Iterable, Mapping as MappingABC
+from collections.abc import Iterable, Mapping as MappingABC
 
 from .model import (
     Connector,
@@ -26,7 +26,13 @@ from .model import (
     Table,
     dependency_order,
 )
-from .naming import layer_for_schema, model_name, schema_from_pre_sql, source_name
+from .naming import (
+    INTERMEDIATE,
+    layer_for_schema,
+    model_name,
+    schema_from_pre_sql,
+    source_name,
+)
 
 __all__ = ["Graph", "GraphError", "ModelPlan", "Read", "build_graph", "plan_models"]
 
@@ -141,7 +147,6 @@ class ModelPlan:
     """
 
     name: str
-    layer: str
     schema: str
     mapping_name: str
     #: The target instance, or the fork step for an intermediate model.
@@ -154,14 +159,22 @@ class ModelPlan:
     #: Steps read as another model instead of being inlined:
     #: instance name -> that model's name.
     boundaries: MappingABC[str, str]
-    #: The column names this model outputs.
-    exposed: tuple[str, ...]
+    #: The column names a shared step hands to its consumers. Empty for a
+    #: target, whose columns come from its table.
+    exposed: tuple[str, ...] = ()
     #: Steps this model shares with another model in the same mapping.
     shared_steps: tuple[str, ...] = ()
 
     @property
     def is_intermediate(self) -> bool:
         return self.table is None
+
+    @property
+    def layer(self) -> str:
+        """The dbt subdirectory this model belongs in."""
+        if self.is_intermediate:
+            return INTERMEDIATE.directory
+        return layer_for_schema(self.schema)
 
     @property
     def depends_on(self) -> tuple[str, ...]:
@@ -300,10 +313,9 @@ def _plan(
     leaf: Instance,
     *,
     name: str,
-    layer: str,
     schema: str,
     table: Table | None,
-    exposed: tuple[str, ...],
+    exposed: tuple[str, ...] = (),
 ) -> ModelPlan:
     """Plan one model: a leaf, and everything feeding it up to the next fork."""
     # An intermediate model owns the fork step itself; a target has no logic of
@@ -322,7 +334,6 @@ def _plan(
 
     return ModelPlan(
         name=name,
-        layer=layer,
         schema=schema,
         mapping_name=context.mapping.name,
         leaf=leaf,
@@ -364,7 +375,6 @@ def plan_models(repo: Repository, *, extract_forks: bool = True) -> tuple[ModelP
                     context,
                     fork,
                     name=intermediate_name(fork_name),
-                    layer="intermediate",
                     schema="",
                     table=None,
                     exposed=_output_ports(mapping, fork),
@@ -384,10 +394,8 @@ def plan_models(repo: Repository, *, extract_forks: bool = True) -> tuple[ModelP
                     context,
                     target,
                     name=model_name(table.name),
-                    layer=layer_for_schema(schema),
                     schema=schema,
                     table=table,
-                    exposed=tuple(c.name.lower() for c in table.columns),
                 )
             )
 
