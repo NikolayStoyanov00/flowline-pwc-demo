@@ -140,12 +140,27 @@ class TestCoercion:
 
 
 @pytest.fixture(scope="module")
-def simulated(repo):
+def sources(repo):
+    """The seed CSVs, read once. Reading them is ~60ms a time."""
     if not SEEDS.is_dir():
         pytest.skip(f"no seed data at {SEEDS}")
-    return run_repository(
-        repo, load_seeds(repo, SEEDS), variable_order=VariableOrder.DEFERRED
-    )
+    return load_seeds(repo, SEEDS)
+
+
+@pytest.fixture(scope="module")
+def simulated(repo, sources):
+    """A full reference run under the reading the converter uses.
+
+    Module-scoped: a run takes well over a second, and only two distinct
+    results exist across this whole module.
+    """
+    return run_repository(repo, sources, variable_order=VariableOrder.DEFERRED)
+
+
+@pytest.fixture(scope="module")
+def simulated_document(repo, sources):
+    """The same, reading variable order literally."""
+    return run_repository(repo, sources, variable_order=VariableOrder.DOCUMENT)
 
 
 class TestRunningTheMapping:
@@ -158,30 +173,27 @@ class TestRunningTheMapping:
         assert simulated.tables["STG_ORDERS"]
         assert simulated.tables["ORDERS"]
 
-    def test_staging_is_one_to_one_with_its_source(self, repo, simulated) -> None:
-        sources = load_seeds(repo, SEEDS)
+    def test_staging_is_one_to_one_with_its_source(self, sources, simulated) -> None:
         assert len(simulated.tables["STG_CUSTOMERS"]) == len(sources["RAW_CUSTOMERS"])
         assert len(simulated.tables["STG_ORDERS"]) == len(sources["RAW_ORDERS"])
 
     def test_the_master_outer_join_drops_unmatched_master_rows(
-        self, repo, simulated
+        self, sources, simulated
     ) -> None:
         """Independently of the converter: customers with no orders should not
         reach CUSTOMERS, because they are the master side of a master outer
         join."""
-        sources = load_seeds(repo, SEEDS)
         with_orders = {row["CUSTOMER"] for row in sources["RAW_ORDERS"]}
         assert len(simulated.tables["CUSTOMERS"]) == len(with_orders)
         assert len(simulated.tables["CUSTOMERS"]) < len(sources["RAW_CUSTOMERS"])
 
     def test_the_router_and_union_round_trip_keeps_every_row(
-        self, repo, simulated
+        self, sources, simulated
     ) -> None:
-        sources = load_seeds(repo, SEEDS)
         assert len(simulated.tables["STG_LOCATIONS"]) == len(sources["RAW_STORES"])
 
-    def test_the_crossed_price_columns(self, repo, simulated) -> None:
-        by_sku = {row["SKU"]: row["PRICE"] for row in load_seeds(repo, SEEDS)["RAW_PRODUCTS"]}
+    def test_the_crossed_price_columns(self, sources, simulated) -> None:
+        by_sku = {row["SKU"]: row["PRICE"] for row in sources["RAW_PRODUCTS"]}
         for row in simulated.tables["STG_PRODUCTS"]:
             raw = by_sku[row["PRODUCT_ID"]]
             assert row["PRODUCT_PRICE"] == raw
@@ -193,14 +205,10 @@ class TestVariableEvaluationOrder:
     PowerCenter. Both readings are implemented so the cost of being wrong can
     be measured rather than guessed at."""
 
-    def test_the_two_readings_disagree_about_the_counter(self, repo) -> None:
-        sources = load_seeds(repo, SEEDS)
-        document = run_repository(
-            repo, sources, variable_order=VariableOrder.DOCUMENT
-        )
-        deferred = run_repository(
-            repo, sources, variable_order=VariableOrder.DEFERRED
-        )
+    def test_the_two_readings_disagree_about_the_counter(
+        self, simulated, simulated_document
+    ) -> None:
+        document, deferred = simulated_document, simulated
 
         literal = max(row["CUSTOMER_ORDER_NUMBER"] for row in document.tables["ORDERS"])
         intended = max(row["CUSTOMER_ORDER_NUMBER"] for row in deferred.tables["ORDERS"])
@@ -210,10 +218,8 @@ class TestVariableEvaluationOrder:
         assert literal > 1000
         assert intended < 100
 
-    def test_the_deferred_reading_makes_the_counter_restart(self, repo) -> None:
-        deferred = run_repository(
-            repo, load_seeds(repo, SEEDS), variable_order=VariableOrder.DEFERRED
-        )
+    def test_the_deferred_reading_makes_the_counter_restart(self, simulated) -> None:
+        deferred = simulated
         per_customer: dict[str, list[int]] = {}
         for row in deferred.tables["ORDERS"]:
             per_customer.setdefault(row["CUSTOMER_ID"], []).append(
@@ -222,19 +228,19 @@ class TestVariableEvaluationOrder:
         for customer, numbers in per_customer.items():
             assert sorted(numbers) == list(range(1, len(numbers) + 1)), customer
 
-    def test_the_literal_reading_makes_a_column_constant(self, repo) -> None:
+    def test_the_literal_reading_makes_a_column_constant(
+        self, simulated, simulated_document
+    ) -> None:
         """UNIQUE_CUSTOMERS is SUM(IS_FIRST_CUSTOMER). Read literally, the
         first-customer test compares a row against itself, so the flag is
         always 0 and the sum is always 0 — a dead column."""
-        document = run_repository(
-            repo, load_seeds(repo, SEEDS), variable_order=VariableOrder.DOCUMENT
-        )
-        values = {row["UNIQUE_CUSTOMERS"] for row in document.tables["STORE_DAILY_KPIS"]}
+        values = {
+            row["UNIQUE_CUSTOMERS"]
+            for row in simulated_document.tables["STORE_DAILY_KPIS"]
+        }
         assert values == {0}
 
-        deferred = run_repository(
-            repo, load_seeds(repo, SEEDS), variable_order=VariableOrder.DEFERRED
-        )
+        deferred = simulated
         values = {row["UNIQUE_CUSTOMERS"] for row in deferred.tables["STORE_DAILY_KPIS"]}
         assert len(values) > 1
         assert 0 not in values
@@ -294,3 +300,32 @@ class TestComparison:
         assert diff.key is None
         assert "row sets" in diff.note
         assert not diff.matches
+
+
+class TestMissingTableIsNotAMatch:
+    """A table absent from the database must never read as OK.
+
+    It is distinct from the benign "compared as unordered row sets" note:
+    overloading one field for both made three identical tables report as
+    differing.
+    """
+
+    def test_a_missing_table_does_not_match_even_when_both_are_empty(self) -> None:
+        from pwc2dbt.compare import TableDiff
+
+        absent = TableDiff(
+            name="T",
+            simulated_rows=0,
+            dbt_rows=0,
+            note="not found in the dbt database",
+            present=False,
+        )
+        assert not absent.matches
+
+    def test_a_keyless_table_still_matches(self) -> None:
+        """Comparing by row set rather than by key is a note, not a failure."""
+        rows = [{"A": "x"}, {"A": "x"}]
+        diff = compare_tables("T", ["A"], rows, [dict(r) for r in rows])
+        assert diff.key is None
+        assert diff.note
+        assert diff.matches

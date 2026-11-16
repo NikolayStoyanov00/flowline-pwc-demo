@@ -14,9 +14,10 @@ Semantics follow Informatica's documentation, with two choices worth naming:
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Any, Mapping, Sequence
 
+from .naming import is_date, is_integer, is_numeric, is_string
 from .expressions import (
     Binary,
     Call,
@@ -57,16 +58,13 @@ def coerce(value: Any, datatype: str) -> Any:
     """Turn a CSV string into the type its PowerCenter datatype implies."""
     if value is None or value == "":
         return None
-    kind = (datatype or "").lower()
-    if kind.startswith("number") or kind in {"decimal", "double", "integer", "real"}:
+    if is_numeric(datatype):
         try:
             number = float(value)
         except (TypeError, ValueError):
             return None
-        if kind == "integer":
-            return int(number)
-        return number
-    if kind in {"timestamp", "date", "date/time"}:
+        return int(number) if is_integer(datatype) else number
+    if is_date(datatype):
         if isinstance(value, (datetime, date)):
             return value
         for pattern in _TIMESTAMP_FORMATS:
@@ -162,9 +160,6 @@ def _truncate(value: Any, part: str) -> Any:
 # ---------------------------------------------------------------------------
 # The evaluator
 # ---------------------------------------------------------------------------
-
-_STRING_TYPES = {"string", "nstring", "text"}
-
 
 class _Evaluator:
     def __init__(
@@ -278,7 +273,7 @@ class _Evaluator:
             if len(args) == 3:
                 return self.eval(args[2])
             # No false branch: an empty string for a string result, else NULL.
-            return "" if self.result_datatype in _STRING_TYPES else None
+            return "" if is_string(self.result_datatype) else None
 
         if name == "ISNULL":
             return self.eval(args[0]) is None
