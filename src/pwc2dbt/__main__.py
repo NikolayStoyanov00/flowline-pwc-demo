@@ -20,7 +20,7 @@ from pathlib import Path
 from .reference.compare import CompareError, compare as compare_outputs
 from .emit import write_project
 from .expressions import ExpressionError, translate
-from .graph import ModelPlan, plan_models, split_points, unsupported_steps
+from .graph import GraphError, ModelPlan, plan_models, split_points, unsupported_steps
 from .model import Kind, Mapping, Repository, Transformation
 from .parse import ParseError, parse_file
 from .reference.simulate import SimulationError, VariableOrder
@@ -405,7 +405,10 @@ def main(argv: list[str] | None = None) -> int:
         seeds = args.seeds if args.seeds and args.seeds.is_dir() else None
         try:
             result = write_project(repo, args.out, seeds)
-        except SqlError as exc:
+        except (SqlError, GraphError, ExpressionError) as exc:
+            # GraphError comes from planning and ExpressionError from reading
+            # variable ports before SQL generation starts; both are about the
+            # input, so they get a one-line error like the rest, not a traceback.
             print(f"error: {exc}", file=sys.stderr)
             return 1
         print(f"wrote {len(result.files)} file(s) to {result.out_dir}")

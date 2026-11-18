@@ -429,3 +429,76 @@ class TestMinimalFixture:
         documented cost of inlining local variables."""
         sql = self._model()
         assert sql.count("case when qty is null then 0 else qty end") == 2
+
+
+class TestRouterDefaultGroup:
+    """A connected default group takes the rows no other group took.
+
+    The sample export leaves every default group unconnected, so this uses
+    `tests/fixtures/router_default.xml`. Before this was handled the default
+    group was emitted with no `where` at all, i.e. it received every row,
+    while the reference run gave it none: both wrong, and in opposite ways.
+    """
+
+    ROWS = (
+        ("1", "APAC"),
+        ("2", "EMEA"),
+        ("3", "AMER"),
+        ("4", None),  # a NULL condition is not a match, so this is "default"
+    )
+
+    @staticmethod
+    def _repo():
+        from pathlib import Path
+
+        from pwc2dbt.parse import parse_file
+
+        return parse_file(Path(__file__).parent / "fixtures" / "router_default.xml")
+
+    def _run(self) -> list[tuple]:
+        import duckdb
+
+        repo = self._repo()
+        (plan,) = plan_models(repo)
+        sql = build_model_sql(repo, plan).replace(
+            "{{ source('raw', 'RAW_LOCATIONS') }}", "raw_locations"
+        )
+        connection = duckdb.connect()
+        connection.execute("create table raw_locations (id varchar, region varchar)")
+        connection.executemany("insert into raw_locations values (?, ?)", self.ROWS)
+        return connection.execute(f"{sql} order by location_id").fetchall()
+
+    def test_default_group_gets_only_the_rows_no_group_took(self) -> None:
+        rows = self._run()
+        assert [(r[0], r[1]) for r in rows] == [("3", "AMER"), ("4", None)]
+
+    def test_the_reference_run_agrees(self) -> None:
+        from pwc2dbt.reference.simulate import run_repository
+
+        result = run_repository(
+            self._repo(),
+            {"RAW_LOCATIONS": [{"ID": i, "REGION": r} for i, r in self.ROWS]},
+        )
+        produced = sorted(
+            (row["LOCATION_ID"], row["REGION"])
+            for row in result.tables["STG_OTHER_REGIONS"]
+        )
+        assert produced == [("3", "AMER"), ("4", None)]
+
+    def test_an_unwritten_target_column_keeps_its_declared_type(self) -> None:
+        import duckdb
+
+        repo = self._repo()
+        (plan,) = plan_models(repo)
+        sql = build_model_sql(repo, plan)
+        assert "cast(null as timestamp) as opened_at" in sql
+
+        connection = duckdb.connect()
+        connection.execute("create table raw_locations (id varchar, region varchar)")
+        described = connection.execute(
+            "describe " + sql.replace(
+                "{{ source('raw', 'RAW_LOCATIONS') }}", "raw_locations"
+            )
+        ).fetchall()
+        types = {name: kind for name, kind, *_ in described}
+        assert types["opened_at"] == "TIMESTAMP"

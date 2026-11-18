@@ -193,6 +193,20 @@ class TestPortParsing:
         port = repo.mappings[0].transformations["EXP"].ports[0]
         assert port.expression == "IIF(TAX_RATE >= 0.15, 'EMEA', 'AMER')"
 
+    def test_whitespace_inside_a_string_literal_is_kept(self) -> None:
+        # The literal is data: collapsing it would compare against 'A B'
+        # instead of 'A  B', and match different rows.
+        repo = parse_string(
+            _wrap(
+                '<MAPPING NAME="m"><TRANSFORMATION NAME="EXP" TYPE="Expression">'
+                '<TRANSFORMFIELD NAME="F" PORTTYPE="OUTPUT" EXPRESSIONTYPE="GENERAL"'
+                " EXPRESSION=\"IIF(NAME =&#xD;&#xA;  'A  B', 1, 0)\"/>"
+                "</TRANSFORMATION></MAPPING>"
+            )
+        )
+        port = repo.mappings[0].transformations["EXP"].ports[0]
+        assert port.expression == "IIF(NAME = 'A  B', 1, 0)"
+
     def test_passthrough_expressions_are_identified(self) -> None:
         repo = parse_string(
             _wrap(

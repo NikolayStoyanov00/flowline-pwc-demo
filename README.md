@@ -29,7 +29,7 @@ cd dbt/jaffle_converted && dbt build          # PASS=56 ERROR=0
 | `dbt docs generate && dbt docs serve` | the lineage DAG, `localhost:8080` |
 | `python scripts/browse.py` | the data, `localhost:4213` |
 | `python scripts/compare_reference.py` | diff against dbt's real jaffle shop |
-| `pytest` | 254 tests, about a minute |
+| `pytest` | 267 tests, about a minute |
 
 Three commands show the converter's reasoning rather than just doing the work —
 the quickest way to judge it without reading Python:
@@ -183,7 +183,7 @@ Email addresses and home paths are redacted.
 ```
 FLOWLINE_DEMO_JAFFLESHOP.xml   the input, unchanged
 src/pwc2dbt/                   the converter; reference/ is the cross-check
-tests/                         254 tests
+tests/                         267 tests
 scripts/                       browse.py, compare_reference.py
 seeds/jaffle/                  3,000-order subset of dbt's jaffle shop seeds
 docs/                          REVIEW.md, concepts.md, example-output/, agent-transcript/
