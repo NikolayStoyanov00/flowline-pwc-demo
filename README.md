@@ -3,7 +3,8 @@
 Reads a PowerCenter repository export and writes a runnable dbt project.
 On the sample export: **3 mappings → 18 dbt models**, which build and test clean
 on DuckDB and match **dbt's real jaffle shop project** everywhere the two
-overlap, except for two deliberate quirks in the source mapping.
+overlap, except where the source mapping is itself wrong — three such
+quirks, each reproduced on purpose rather than quietly corrected.
 
 Nothing is hard-coded to the jaffle shop answer. Each PowerCenter step becomes a
 CTE: the converter walks the connector graph back from every target and
