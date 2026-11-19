@@ -12,6 +12,7 @@ import re
 import pytest
 import sqlglot
 
+from pwc2dbt.expressions import VariableOrder
 from pwc2dbt.graph import plan_models
 from pwc2dbt.sql import build_model_sql
 
@@ -107,23 +108,38 @@ class TestJoinDirection:
 
 
 class TestRowNumber:
-    def test_the_self_referencing_counter_becomes_row_number(self, models) -> None:
+    def test_the_counter_never_restarts_under_the_documented_order(
+        self, models
+    ) -> None:
+        """The mapping assigns v_PREV_CUSTOMER_ID *before* the port that
+        tests it, so the test compares a row to itself and is always true.
+        No ``partition by``: the counter runs straight through."""
         sql = models["orders"]
+        assert (
+            "row_number() over (order by customer_id, ordered_at_day, order_id) "
+            "as customer_order_number" in sql
+        )
+        assert "partition by customer_id" not in sql
+
+    def test_the_deferred_reading_restarts_per_customer(self, repo) -> None:
+        """Opting into the corrected reading puts the partition back."""
+        plan = next(p for p in plan_models(repo) if p.name == "orders")
+        sql = build_model_sql(repo, plan, VariableOrder.DEFERRED)
         assert (
             "row_number() over (partition by customer_id "
             "order by ordered_at_day, order_id) as customer_order_number" in sql
         )
 
     def test_the_ordering_comes_from_the_upstream_sorter(self, repo, models) -> None:
-        """SRT_BY_CUSTOMER sorts on CUSTOMER_ID, ORDERED_AT_DAY, ORDER_ID. The
-        partition key is dropped from the ordering, leaving the other two."""
+        """SRT_BY_CUSTOMER sorts on CUSTOMER_ID, ORDERED_AT_DAY, ORDER_ID, and
+        all three order the window because nothing partitions it."""
         sorter = repo.mapping("m_FL_JS_MARTS_CORE").transformations["SRT_BY_CUSTOMER"]
         assert [p.name for p in sorter.sort_keys] == [
             "CUSTOMER_ID",
             "ORDERED_AT_DAY",
             "ORDER_ID",
         ]
-        assert "order by ordered_at_day, order_id" in models["orders"]
+        assert "order by customer_id, ordered_at_day, order_id" in models["orders"]
 
     def test_the_translation_is_recorded_in_the_model(self, models) -> None:
         # Anything interpreted rather than translated literally should be
@@ -299,13 +315,15 @@ class TestStatefulVariableShapes:
             ),
         )
 
-    def _keys(self, expression: str):
+    def _keys(self, expression: str, order: str = VariableOrder.DEFERRED):
         """Run just the shape check, with a builder over a throwaway mapping."""
         from pwc2dbt.sql import _ModelBuilder
 
         transformation = self._transformation(expression)
         builder = _ModelBuilder.__new__(_ModelBuilder)
         builder.mapping = type("M", (), {"name": "m"})()
+        builder.variable_order = order
+        builder.notes = []
         return builder.counter_partition_keys(
             transformation, transformation.ports[-1]
         )
@@ -319,6 +337,15 @@ class TestStatefulVariableShapes:
         assert self._keys("IIF(v_PREV_C = CUSTOMER_ID, 1 + v_C, 1)") == (
             "CUSTOMER_ID",
         )
+
+    def test_the_documented_order_gives_the_counter_nothing_to_restart_on(
+        self,
+    ) -> None:
+        """v_PREV_C holds this row's CUSTOMER_ID by the time the test reads
+        it, so the test is a tautology and there is no partition key."""
+        assert self._keys(
+            "IIF(v_PREV_C = CUSTOMER_ID, v_C + 1, 1)", VariableOrder.DOCUMENT
+        ) == ()
 
     @pytest.mark.parametrize(
         ("expression", "why"),
@@ -348,9 +375,10 @@ class TestStatefulVariableShapes:
         condition would emit row_number() and silently replace every value."""
         from pwc2dbt.sql import SqlError
 
-        with pytest.raises(SqlError, match="only a running count") as raised:
-            self._keys(expression)
-        assert why, raised
+        for order in VariableOrder.ALL:
+            with pytest.raises(SqlError, match="only a running count") as raised:
+                self._keys(expression, order)
+            assert why, raised
 
 
 class TestSortDirection:
@@ -383,7 +411,10 @@ class TestSortDirection:
 
         plan = next(p for p in plan_models(patched_repo) if p.name == "orders")
         sql = build_model_sql(patched_repo, plan)
-        assert "order by ordered_at_day desc, order_id desc" in sql
+        assert (
+            "order by customer_id desc, ordered_at_day desc, order_id desc"
+            in sql
+        )
 
     def test_the_real_export_is_all_ascending(self, models) -> None:
         # All 140 sort keys in this export are ASCENDING, so no ordering in
