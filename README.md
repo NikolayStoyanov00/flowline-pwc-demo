@@ -29,7 +29,7 @@ cd dbt/jaffle_converted && dbt build          # PASS=56 ERROR=0
 | `dbt docs generate && dbt docs serve` | the lineage DAG, `localhost:8080` |
 | `python scripts/browse.py` | the data, `localhost:4213` |
 | `python scripts/compare_reference.py` | diff against dbt's real jaffle shop |
-| `pytest` | 270 tests, about a minute |
+| `pytest` | 278 tests, about a minute |
 
 Three commands show the converter's reasoning rather than just doing the work —
 the quickest way to judge it without reading Python:
@@ -55,7 +55,7 @@ Of the 11 overlapping models:
   `order_items`, `products`
 - **2 differ on row count** — `customers` (168 vs 935), `orders` (2967 vs 3000)
 
-**Every difference traces to one of the two quirks below. Nothing else
+**Every difference traces to one of the quirks below. Nothing else
 differs.** The 5 enriched marts have no jaffle shop equivalent, so those rely on
 `pwc2dbt compare`: a second implementation of the documented Informatica
 semantics, run row by row. That shows the two implementations are *consistent*,
@@ -178,10 +178,15 @@ rather than comparing strings, and running the same mapping a second way.
 
 ## The prompts I gave the agent
 
-[`docs/agent-transcript/prompts.md`](docs/agent-transcript/prompts.md) — every
-instruction, in order, verbatim.
-[`conversation.md`](docs/agent-transcript/conversation.md) is the full exchange.
-Email addresses and home paths are redacted.
+[`docs/agent-transcript/prompts.md`](docs/agent-transcript/prompts.md) — all 33
+instructions, in order, verbatim.
+[`conversation.md`](docs/agent-transcript/conversation.md) is the full exchange,
+agent replies included.
+
+Both are generated from the Claude Code session log by
+`python scripts/export_transcript.py`, so they cannot drift behind the work.
+Email addresses and home directory paths are redacted, and the export fails if
+either survives.
 
 ---
 
@@ -210,8 +215,8 @@ Email addresses and home paths are redacted.
 ```
 FLOWLINE_DEMO_JAFFLESHOP.xml   the input, unchanged
 src/pwc2dbt/                   the converter; reference/ is the cross-check
-tests/                         270 tests
-scripts/                       browse.py, compare_reference.py
+tests/                         278 tests
+scripts/                       browse.py, compare_reference.py, export_transcript.py
 seeds/jaffle/                  3,000-order subset of dbt's jaffle shop seeds
 docs/                          REVIEW.md, concepts.md, example-output/, agent-transcript/
 ```

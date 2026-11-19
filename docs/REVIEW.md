@@ -122,19 +122,19 @@ and the second implementation. `git checkout src/pwc2dbt/sql.py` to revert.
 
 ## Reading the code
 
-~5,000 lines, strictly layered: each module only knows the ones above it, and
+~5,400 lines, strictly layered: each module only knows the ones above it, and
 `src/pwc2dbt/__init__.py` lists the stages. `reference/` is a separate concern —
-the converter never imports it — so the converter itself is ~3,600 lines.
+the converter never imports it — so the converter itself is ~4,000 lines.
 Read `docs/concepts.md` first if "mapping / instance / port" is still unclear.
 
 | Read | Lines | Look for |
 |---|---|---|
-| `model.py` | 339 | just shapes. `Instance` is a table alias |
-| `parse.py` | 317 | the only module touching XML |
+| `model.py` | 384 | just shapes. `Instance` is a table alias |
+| `parse.py` | 326 | the only module touching XML |
 | `graph.py` | 444 | `split_points`, `_walk_back` — the fork decision |
-| `expressions.py` | 775 | the only real algorithm: tokenise → parse → emit |
-| **`sql.py`** | 833 | **the core.** `_join_shape`, then `inputs_of`/`register` |
-| `emit.py` | 360 | the dbt project; `trace_column` attaches tests by lineage |
+| `expressions.py` | 833 | the only real algorithm: tokenise → parse → emit |
+| **`sql.py`** | 958 | **the core.** `_join_shape`, then `inputs_of`/`register` |
+| `emit.py` | 368 | the dbt project; `trace_column` attaches tests by lineage |
 | `reference/` | 1,400 | the second implementation; skim |
 
 ### Walking it through in a debugger
@@ -153,10 +153,10 @@ Then set these breakpoints and debug it.
 
 | Breakpoint | What to look at |
 |---|---|
-| `parse.py:230` `_parse_mapping` | `transformations`, `instances`, `connectors` — the XML as objects |
-| `graph.py:306` `_plan` | `step_names`, and the order `topological_order` puts them in |
-| `sql.py:700` `_ModelBuilder.build` | step into each `emit_*` in turn |
-| `sql.py:98` `register` | watch `self.columns` fill up — this is the core |
+| `parse.py:239` `_parse_mapping` | `transformations`, `instances`, `connectors` — the XML as objects |
+| `graph.py:311` `_plan` | `step_names`, and the order `topological_order` puts them in |
+| `sql.py:750` `_ModelBuilder.build` | step into each `emit_*` in turn |
+| `sql.py:99` `register` | watch `self.columns` fill up — this is the core |
 
 Both IDEs have committed configurations, so open the **repo itself** as the
 project — not a parent folder, or the interpreter will be the system Python and
