@@ -60,7 +60,9 @@ class TestFunctions:
         assert (
             evaluate("IIF(A = 1, 'x')", {"A": 0}, result_datatype="string") == ""
         )
-        assert evaluate("IIF(A = 1, 5)", {"A": 0}, result_datatype="decimal") is None
+        # Informatica returns 0 for a numeric result, not NULL.
+        assert evaluate("IIF(A = 1, 5)", {"A": 0}, result_datatype="decimal") == 0
+        assert evaluate("IIF(A = 1, 5)", {"A": 0}, result_datatype="date/time") is None
 
     def test_date_diff_is_first_minus_second(self) -> None:
         days = evaluate(

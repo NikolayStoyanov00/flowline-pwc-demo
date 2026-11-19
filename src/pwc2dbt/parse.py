@@ -30,6 +30,8 @@ from .validate import ParseError, validate_envelope
 __all__ = ["parse_file", "parse_string", "ParseError"]
 
 _WHITESPACE = re.compile(r"\s+")
+#: A single-quoted literal, with '' as an escaped quote, as the tokenizer reads it.
+_LITERAL = re.compile(r"('(?:[^']|'')*')")
 
 
 # ---------------------------------------------------------------------------
@@ -65,10 +67,18 @@ def _normalise(value: str | None) -> str | None:
     Expressions are written across several lines in the XML, arriving with
     embedded CR/LF. Collapsing them here means the expression parser never
     sees a line break.
+
+    Quoted literals are left exactly as written: ``'A  B'`` is data, and
+    collapsing it to ``'A B'`` would change what the expression compares to.
     """
     if value is None:
         return None
-    collapsed = _WHITESPACE.sub(" ", value).strip()
+    pieces = _LITERAL.split(value)
+    # split() with a capturing group alternates: outside, literal, outside...
+    collapsed = "".join(
+        piece if index % 2 else _WHITESPACE.sub(" ", piece)
+        for index, piece in enumerate(pieces)
+    ).strip()
     return collapsed or None
 
 

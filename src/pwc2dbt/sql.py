@@ -487,7 +487,6 @@ class _ModelBuilder:
 
         grouped: list[str] = []
         aggregated: list[str] = []
-        order: list[tuple[str, str]] = []
         #: Group keys the transformation does not emit. They still have to
         #: reach the GROUP BY, or the aggregation runs at a coarser grain and
         #: every aggregate silently covers too many rows.
@@ -510,7 +509,6 @@ class _ModelBuilder:
                     grouped_not_emitted.append(sql)
                     continue
                 grouped.append(self.column_item(instance, name, port.name, sql))
-                order.append(("group", port.name))
             elif not port.is_output:
                 continue
             elif port.expression:
@@ -521,7 +519,6 @@ class _ModelBuilder:
                     parameters=self.parameters,
                 )
                 aggregated.append(self.column_item(instance, name, port.name, sql))
-                order.append(("agg", port.name))
 
         items = grouped + aggregated
         # Emitted keys go in by position, which is the dbt house style; a key
@@ -605,17 +602,38 @@ class _ModelBuilder:
                         instance, name, port.name, inputs[origin].name, alias=origin
                     )
                 )
-            where = (
-                translate(
+            if group.is_default:
+                where = self.default_group_condition(transformation, resolve)
+            elif group.expression:
+                where = translate(
                     group.expression, resolver=resolve, parameters=self.parameters
                 )
-                if group.expression
-                else ""
-            )
+            else:
+                where = ""
             self.add_cte(
                 name,
                 _select(items, upstream, where=where, note=f"router group {group.name}"),
             )
+
+    def default_group_condition(
+        self, transformation: Transformation, resolve: Callable[[str], str]
+    ) -> str:
+        """The rows a Router's default group takes: those no other group took.
+
+        A default group has no condition of its own, so emitting it with no
+        ``where`` would send it every row. A condition evaluating to NULL
+        counts as not matched, hence the ``coalesce``.
+        """
+        others = [g for g in transformation.output_groups if not g.is_default]
+        if any(not g.expression for g in others):
+            # A group with no condition takes every row, leaving none over.
+            return "false"
+        return " and ".join(
+            "not coalesce("
+            + translate(g.expression, resolver=resolve, parameters=self.parameters)
+            + ", false)"
+            for g in others
+        )
 
     def emit_union(self, instance: Instance) -> None:
         transformation = self.definition(instance)
@@ -695,8 +713,12 @@ class _ModelBuilder:
             origin = inputs.get(column.name)
             if origin is None:
                 # A target column nothing writes to. Keep it, as NULL, so the
-                # model's shape still matches the table it replaces.
-                items.append(f"cast(null as varchar) as {column.name.lower()}")
+                # model's shape still matches the table it replaces, including
+                # its type: an untyped NULL column would be a varchar.
+                items.append(
+                    f"cast(null as {sql_type(column.datatype)}) "
+                    f"as {column.name.lower()}"
+                )
                 self.notes.append(f"target column {column.name} is never written")
                 continue
             items.append(_select_item(origin.name, column.name.lower()))

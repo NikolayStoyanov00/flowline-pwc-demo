@@ -406,9 +406,10 @@ class TestOperatorPrecedence:
 class TestTwoArgumentIif:
     """``IIF(condition, value)`` has a trap in it.
 
-    Informatica returns an empty string when the condition is false and the
-    result is string-typed, but NULL for every other type. A plain
-    ``CASE WHEN ... THEN ... END`` gets the string case wrong.
+    When the condition is false Informatica returns 0 for a numeric result,
+    an empty string for a string, and NULL for a date/time — see
+    https://docs.informatica.com/data-integration/powercenter/10-5/transformation-language-reference/functions/iif.html
+    A plain ``CASE WHEN ... THEN ... END`` gets the first two wrong.
 
     No expression in this export uses the two-argument form, so this is
     defensive, but it is the kind of difference that produces data that looks
@@ -416,10 +417,6 @@ class TestTwoArgumentIif:
     """
 
     def test_string_result_falls_back_to_empty_string(self, duck) -> None:
-        assert (
-            translate("IIF(FLAG = 1, NAME)", result_datatype="string")
-            == "coalesce(case when flag = 1 then name end, '')"
-        )
         assert (
             evaluate(
                 duck,
@@ -431,11 +428,23 @@ class TestTwoArgumentIif:
             == ""
         )
 
-    def test_other_types_fall_back_to_null(self, duck) -> None:
+    def test_a_null_true_value_stays_null(self, duck) -> None:
+        """The fallback is for a false condition only. Wrapping the whole
+        ``case`` in ``coalesce(..., '')`` also turned a NULL *chosen* value
+        into ''."""
         assert (
-            translate("IIF(FLAG = 1, AMOUNT)", result_datatype="decimal")
-            == "case when flag = 1 then amount end"
+            evaluate(
+                duck,
+                "IIF(FLAG = 1, NAME)",
+                result_datatype="string",
+                types={"NAME": "varchar"},
+                FLAG=1,
+                NAME=None,
+            )
+            is None
         )
+
+    def test_numeric_result_falls_back_to_zero(self, duck) -> None:
         assert (
             evaluate(
                 duck,
@@ -444,8 +453,35 @@ class TestTwoArgumentIif:
                 FLAG=0,
                 AMOUNT=5,
             )
+            == 0
+        )
+
+    def test_date_result_falls_back_to_null(self, duck) -> None:
+        assert (
+            evaluate(
+                duck,
+                "IIF(FLAG = 1, OPENED_AT)",
+                result_datatype="date/time",
+                FLAG=0,
+                OPENED_AT=datetime(2026, 1, 1),
+            )
             is None
         )
+
+    def test_an_unknown_result_type_is_refused(self) -> None:
+        # Each of the three fallbacks is wrong for the other two types.
+        with pytest.raises(ExpressionError, match="IIF without a false branch"):
+            translate("IIF(FLAG = 1, AMOUNT)")
+
+    def test_the_reference_evaluator_agrees(self) -> None:
+        from pwc2dbt.reference.evaluate import evaluate as reference
+
+        tree = parse_expression("IIF(FLAG = 1, AMOUNT)")
+        for datatype, expected in (("decimal", 0), ("string", ""), ("date/time", None)):
+            assert (
+                reference(tree, {"FLAG": 0, "AMOUNT": 5}, result_datatype=datatype)
+                == expected
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -640,3 +676,36 @@ class TestResolver:
         assert translate("IIF(NAME = 'O''Brien', 1, 0)") == (
             "case when name = 'O''Brien' then 1 else 0 end"
         )
+
+
+# ---------------------------------------------------------------------------
+# Date format masks
+# ---------------------------------------------------------------------------
+
+
+class TestDateMasks:
+    """A mask token the translator does not know must not be copied through.
+
+    strftime prints anything that is not a directive as literal text, so an
+    unknown ``Q`` would come out as the letter Q in every row: valid SQL,
+    plausible-looking output, wrong.
+    """
+
+    def test_a_supported_mask_formats_the_date(self, duck) -> None:
+        assert (
+            evaluate(
+                duck,
+                "TO_CHAR(D, 'YYYY-MM-DD HH12:MI')",
+                D=datetime(2026, 4, 1, 15, 30),
+            )
+            == "2026-04-01 03:30"
+        )
+
+    @pytest.mark.parametrize("mask", ["YYYY-Q", "DY", "YYYY-MM-DD RR"])
+    def test_an_unknown_token_is_refused(self, mask: str) -> None:
+        with pytest.raises(ExpressionError, match="unsupported date format"):
+            translate(f"TO_CHAR(D, '{mask}')")
+
+    def test_a_percent_sign_is_literal(self, duck) -> None:
+        # Unescaped, '%' would start a strftime directive of its own.
+        assert evaluate(duck, "TO_CHAR(D, 'DD%')", D=datetime(2026, 4, 1)) == "01%"

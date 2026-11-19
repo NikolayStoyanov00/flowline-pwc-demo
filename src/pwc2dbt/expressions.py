@@ -21,7 +21,7 @@ from enum import Enum, auto
 from collections.abc import Callable, Iterable, Mapping as MappingABC, Sequence
 
 from .model import CycleError, Port, dependency_order
-from .naming import is_date, is_string
+from .naming import is_date, is_numeric, is_string
 
 __all__ = [
     "ExpressionError",
@@ -32,6 +32,7 @@ __all__ = [
     "references",
     "date_mask_to_strftime",
     "date_part",
+    "iif_default",
 ]
 
 
@@ -328,6 +329,7 @@ _DATE_MASK = [
     ("YYYY", "%Y"),
     ("MONTH", "%B"),
     ("HH24", "%H"),
+    ("HH12", "%I"),
     ("MON", "%b"),
     ("MM", "%m"),
     ("DDD", "%j"),
@@ -373,12 +375,20 @@ _MASK_LOOKUP = dict(_DATE_MASK)
 def date_mask_to_strftime(mask: str) -> str:
     """Translate an Informatica date format mask into strftime directives.
 
-    Anything that is not a mask token is left alone, so separators survive:
-    ``DD-MM-YY`` becomes ``%d-%m-%y``.
+    Separators survive: ``DD-MM-YY`` becomes ``%d-%m-%y``. Letters that are
+    not a supported token raise instead of being copied through, because a
+    copied ``Q`` or ``DY`` would print as literal text in every row, and
+    ``HH12`` would quietly become an hour followed by ``12``.
     """
-    return _MASK_PATTERN.sub(
-        lambda m: _MASK_LOOKUP[m.group().upper()], mask
-    )
+    escaped = mask.replace("%", "%%")
+    leftover = _MASK_PATTERN.sub("", escaped)
+    unknown = re.findall(r"[A-Za-z]+", leftover)
+    if unknown:
+        raise ExpressionError(
+            f"unsupported date format token(s) {', '.join(unknown)} in {mask!r}; "
+            "supported: " + ", ".join(token for token, _ in _DATE_MASK)
+        )
+    return _MASK_PATTERN.sub(lambda m: _MASK_LOOKUP[m.group().upper()], escaped)
 
 
 def date_part(mask: str) -> str | None:
@@ -534,8 +544,10 @@ class _Emitter:
     def fn_iif(self, args: Sequence[Node]) -> str:
         """``IIF(condition, true_value [, false_value])`` -> ``CASE WHEN``.
 
-        With no false branch Informatica returns an empty string for a
-        string-typed result and NULL otherwise, so the result datatype decides.
+        With no false branch Informatica falls back on the result's datatype:
+        0 for a number, an empty string for a string, NULL for a date. The
+        fallback goes in the ``else``, not round the whole ``case``: wrapping
+        it in ``coalesce`` would also replace a NULL *true* value.
         """
         if len(args) == 3:
             return (
@@ -543,10 +555,13 @@ class _Emitter:
                 f"else {self.emit(args[2])} end"
             )
         if len(args) == 2:
-            body = f"case when {self.emit(args[0])} then {self.emit(args[1])} end"
-            if is_string(self.result_datatype):
-                return f"coalesce({body}, '')"
-            return body
+            body = f"case when {self.emit(args[0])} then {self.emit(args[1])}"
+            fallback = iif_default(self.result_datatype)
+            if fallback is None:
+                return f"{body} end"
+            if isinstance(fallback, str):
+                return f"{body} else {_quote(fallback)} end"
+            return f"{body} else {fallback} end"
         raise ExpressionError(f"IIF takes 2 or 3 arguments, got {len(args)}")
 
     def fn_isnull(self, args: Sequence[Node]) -> str:
@@ -621,6 +636,26 @@ class _Emitter:
             )
 
         return handler
+
+
+def iif_default(datatype: str) -> int | str | None:
+    """What a two-argument IIF returns when its condition is false.
+
+    Informatica decides by datatype: 0, an empty string, or NULL for a date.
+    The SQL emitter and the reference evaluator both ask here, so they cannot
+    drift apart. An unknown datatype raises rather than picking one, because
+    each guess is wrong for the other two types.
+    """
+    if is_numeric(datatype):
+        return 0
+    if is_string(datatype):
+        return ""
+    if is_date(datatype):
+        return None
+    raise ExpressionError(
+        "IIF without a false branch returns 0, '' or NULL depending on the "
+        f"result type, and the type here is {datatype or 'not known'!r}"
+    )
 
 
 def _date_part(mask: str) -> str:

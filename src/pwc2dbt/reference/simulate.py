@@ -467,21 +467,26 @@ class _MappingRun:
         rows = self.single_input(instance)
         produced: Grouped = {}
 
+        def matches(group, row) -> bool:
+            if not group.expression:
+                return True
+            tree = self.tree(group.expression)
+            return evaluate(tree, row, parameters=self.parameters) is True
+
+        others = [g for g in transformation.output_groups if not g.is_default]
         for group in transformation.output_groups:
             ports = [
                 p
                 for p in transformation.ports
                 if p.group == group.name and p.is_output
             ]
-            if group.is_default:
-                produced[group.name] = []
-                continue
-            tree = self.tree(group.expression) if group.expression else None
             selected = []
             for row in rows:
-                if tree is not None and evaluate(
-                    tree, row, parameters=self.parameters
-                ) is not True:
+                if group.is_default:
+                    # The default group takes the rows no other group took.
+                    if any(matches(g, row) for g in others):
+                        continue
+                elif not matches(group, row):
                     continue
                 selected.append(
                     {p.name: row.get(p.ref_field or p.name) for p in ports}

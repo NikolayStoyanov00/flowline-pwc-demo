@@ -19,10 +19,11 @@ from datetime import date, datetime
 from typing import Any
 from collections.abc import Mapping, Sequence
 
-from ..naming import is_date, is_integer, is_numeric, is_string
+from ..naming import is_date, is_integer, is_numeric
 from ..expressions import (
     date_mask_to_strftime,
     date_part,
+    iif_default,
     Binary,
     Call,
     ExpressionError,
@@ -253,8 +254,8 @@ class _Evaluator:
                 return self.eval(args[1])
             if len(args) == 3:
                 return self.eval(args[2])
-            # No false branch: an empty string for a string result, else NULL.
-            return "" if is_string(self.result_datatype) else None
+            # No false branch: 0, '' or NULL by result type, as in the SQL.
+            return iif_default(self.result_datatype)
 
         if name == "ISNULL":
             return self.eval(args[0]) is None
