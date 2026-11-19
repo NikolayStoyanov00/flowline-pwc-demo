@@ -15,6 +15,7 @@ from pathlib import Path
 from .graph import ModelPlan, build_graph, plan_models
 from .model import Kind, Repository, Table, Transformation
 from .naming import LAYERS, project_name, source_name
+from .expressions import VariableOrder
 from .sql import build_model_sql
 
 __all__ = ["EmitResult", "write_project"]
@@ -312,6 +313,7 @@ def write_project(
     repo: Repository,
     out_dir: Path | str,
     seeds_dir: Path | str | None = None,
+    variable_order: str = VariableOrder.DOCUMENT,
 ) -> EmitResult:
     out_dir = Path(out_dir)
     plans = plan_models(repo)
@@ -343,7 +345,7 @@ def write_project(
     write("models/staging/__sources.yml", _source_yaml(raw_tables))
 
     for plan in plans:
-        write(f"models/{plan.layer}/{plan.name}.sql", build_model_sql(repo, plan))
+        write(f"models/{plan.layer}/{plan.name}.sql", build_model_sql(repo, plan, variable_order))
         yaml, count = _model_yaml(repo, plan)
         write(f"models/{plan.layer}/{plan.name}.yml", yaml)
         test_count += count

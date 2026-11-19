@@ -34,6 +34,7 @@ from ..expressions import (
     Reference,
     Star,
     parse_expression,
+    VariableOrder,
     stateful_variable_ports,
 )
 from ..graph import build_graph
@@ -50,33 +51,14 @@ from ..model import (
     dependency_order,
 )
 
-__all__ = ["SimulationError", "Result", "run_repository", "load_seeds", "VariableOrder"]
+__all__ = [
+    "VariableOrder","SimulationError", "Result", "run_repository", "load_seeds", "VariableOrder"]
 
 
 class SimulationError(Exception):
     """The mapping cannot be executed."""
 
 
-class VariableOrder:
-    """How to order the evaluation of local variable ports.
-
-    PowerCenter evaluates them top to bottom in Ports-tab order, and the XML
-    appears to preserve that order. Whether it really does is the one semantic
-    question in this export that cannot be settled without PowerCenter, and it
-    decides whether a running counter ever resets, so both readings are
-    available here.
-    """
-
-    #: As the XML declares them. The literal reading: a variable assigned a
-    #: bare column is updated before anything reads it, so it holds the
-    #: *current* row.
-    DOCUMENT = "document"
-
-    #: Variables that are a bare column reference are updated last, so when
-    #: another variable reads one it still holds the *previous* row's value.
-    #: This is what the "remember the previous row" idiom needs in order to
-    #: work, and what the port names imply was intended.
-    DEFERRED = "deferred"
 
 
 @dataclass
