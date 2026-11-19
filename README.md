@@ -167,7 +167,40 @@ After those: emit local variables as CTEs instead of inlining them.
 
 ## Where the coding agent got it wrong, and how I caught it
 
-Seven, and **four got through a green test suite** — the main thing I learned.
+Seven mistakes. **Four of them passed a green test suite**, which is the part
+worth knowing: writing more tests would not have found them. They fall into
+three kinds.
+
+**1. The tests agreed with the code instead of checking it.** Early tests
+asserted that a function returned something, or compared generated SQL against
+a string written minutes earlier in the same session. A test like that passes
+whatever the code does. One asserted that `A + B * C` is 13, with A=10, B=5,
+C=3. It is 25, and the suite stayed green because nothing ever ran the SQL.
+The rule changed to *test the behaviour, not the code*: generate the SQL,
+execute it in DuckDB, assert the numbers that come back. That is what made the
+suite able to fail.
+
+**2. It guessed where the export was ambiguous.** Faced with something it could
+not resolve, the agent picked a plausible reading and moved on without saying
+so. It emitted a running *total* as `row_number()` because its pattern check
+read the `IIF` condition but never looked at the branches. It left column types
+for the warehouse to infer, and DuckDB decided `PERISHABLE` was boolean and
+cast `'Y'` to true, inverting 4,528 cells while `dbt build` and 201 tests
+stayed green. Two things fixed this: the converter now raises on anything it
+does not recognise, and a second implementation re-runs the same mapping row by
+row so the two can disagree.
+
+**3. Valid SQL that means the wrong thing.** `{{ var('run_date') }}` was
+emitted unquoted. That is syntactically fine, so sqlglot parsed it without
+complaint, but DuckDB read `2026-04-01` as arithmetic and got 2021. Only a real
+`dbt build` surfaced it.
+
+What caught these was output: running the converter, printing what it had
+decided, executing the SQL instead of comparing strings, and running the same
+mapping a second way to see whether the two answers matched.
+
+<details>
+<summary><b>All seven, and what caught each</b></summary>
 
 | What | How it was caught |
 |---|---|
@@ -179,9 +212,7 @@ Seven, and **four got through a green test suite** — the main thing I learned.
 | Source columns left to the warehouse to type: DuckDB inferred `PERISHABLE` as boolean, cast `'Y'` to true, inverting 4,528 cells | the second implementation disagreed. `dbt build` and 201 tests were green |
 | A running *total* silently emitted as `row_number()`: the shape check read the `IIF` condition but never its branches | a review pass at the end, not by any test |
 
-The pattern: the agent was good at structure and bad at being sure. What caught
-things was *output* — running it, printing what it decided, executing the SQL
-rather than comparing strings, and running the same mapping a second way.
+</details>
 
 ---
 
