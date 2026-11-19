@@ -2,10 +2,10 @@
   // Debug configurations for walking the converter through.
   //
   // Pick one in Run and Debug (Ctrl+Shift+D), then F5. Set breakpoints first:
-  //   parse.py:230   _parse_mapping          the XML as objects
-  //   graph.py:306   _plan                   which models, and step order
-  //   sql.py:700     _ModelBuilder.build     the core: steps -> CTEs
-  //   sql.py:98      register                watch self.columns fill up
+  //   parse.py:239   _parse_mapping          the XML as objects
+  //   graph.py:311   _plan                   which models, and step order
+  //   sql.py:750     _ModelBuilder.build     the core: steps -> CTEs
+  //   sql.py:99      register                watch self.columns fill up
   //
   // "justMyCode": false lets you step into dbt/duckdb if you want to; set it
   // true to stay inside this project.

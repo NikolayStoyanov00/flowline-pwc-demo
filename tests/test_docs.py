@@ -1,9 +1,10 @@
 """The documentation makes checkable claims; these check them.
 
 `docs/REVIEW.md` walks a reviewer through the code by file, line and test
-name. Those go stale silently as the code moves, and a reviewer following a
-breakpoint into the wrong function has no way to tell it is the doc that is
-wrong rather than their understanding.
+name, and `.vscode/launch.json` repeats the breakpoints for anyone who opens
+the debugger instead. Those go stale silently as the code moves, and a reviewer
+following a breakpoint into the wrong function has no way to tell it is the doc
+that is wrong rather than their understanding.
 """
 
 from __future__ import annotations
@@ -19,11 +20,16 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REVIEW = PROJECT_ROOT / "docs" / "REVIEW.md"
 README = PROJECT_ROOT / "README.md"
+LAUNCH = PROJECT_ROOT / ".vscode" / "launch.json"
 PACKAGE = PROJECT_ROOT / "src" / "pwc2dbt"
 TESTS = PROJECT_ROOT / "tests"
 
-#: `sql.py:750`, as written in a breakpoint table.
-CITATION = re.compile(r"`(?P<module>[a-z_]+\.py):(?P<line>\d+)`")
+#: Everything that sends a reviewer to a line number.
+BREAKPOINT_DOCS = (REVIEW, LAUNCH)
+
+#: ``sql.py:750``, backticked in REVIEW.md's table and bare in launch.json's
+#: header comment.
+CITATION = re.compile(r"(?P<module>[a-z_]+\.py):(?P<line>\d+)")
 
 
 def _collected_test_count() -> int:
@@ -34,6 +40,7 @@ def _collected_test_count() -> int:
     """
     result = subprocess.run(
         [sys.executable, "-m", "pytest", "--collect-only", "-q", str(TESTS)],
+        check=False,
         capture_output=True,
         text=True,
         cwd=PROJECT_ROOT,
@@ -54,35 +61,42 @@ def _definitions(module: Path) -> dict[int, str]:
     }
 
 
-def _cited_lines() -> list[tuple[str, int, str]]:
-    text = REVIEW.read_text(encoding="utf-8")
+def _cited_lines() -> list[tuple[str, str, int, str]]:
+    """(document, module, line, the text that cites it)."""
     cited = []
-    for line in text.splitlines():
-        for match in CITATION.finditer(line):
-            cited.append((match["module"], int(match["line"]), line.strip()))
+    for document in BREAKPOINT_DOCS:
+        for line in document.read_text(encoding="utf-8").splitlines():
+            for match in CITATION.finditer(line):
+                cited.append(
+                    (document.name, match["module"], int(match["line"]), line.strip())
+                )
     return cited
 
 
 class TestTheBreakpointsPointSomewhere:
-    def test_the_review_cites_some_breakpoints(self) -> None:
-        """Guard the guard: if the table is reworded away, this file should
-        stop claiming to check it."""
-        assert len(_cited_lines()) >= 4
+    def test_both_documents_still_cite_breakpoints(self) -> None:
+        """Guard the guard: if a table is reworded away, this file should stop
+        claiming to check it."""
+        cited = _cited_lines()
+        for document in BREAKPOINT_DOCS:
+            assert any(name == document.name for name, _, _, _ in cited), (
+                f"{document.name} no longer cites any line numbers"
+            )
 
     @pytest.mark.parametrize(
-        ("module", "line", "context"),
+        ("document", "module", "line", "context"),
         _cited_lines(),
         ids=lambda value: str(value) if not isinstance(value, str) else value[:20],
     )
     def test_each_cited_line_starts_a_definition(
-        self, module: str, line: int, context: str
+        self, document: str, module: str, line: int, context: str
     ) -> None:
         path = PACKAGE / module
-        assert path.is_file(), f"REVIEW.md cites {module}, which does not exist"
+        assert path.is_file(), f"{document} cites {module}, which does not exist"
 
         definitions = _definitions(path)
         assert line in definitions, (
-            f"REVIEW.md sends a reviewer to {module}:{line}, which is not the "
+            f"{document} sends a reviewer to {module}:{line}, which is not the "
             f"first line of any function or class. Nearest above: "
             f"{max((n for n in definitions if n <= line), default='none')}. "
             f"Cited in: {context}"
@@ -91,12 +105,12 @@ class TestTheBreakpointsPointSomewhere:
     def test_the_named_function_is_the_one_at_that_line(self) -> None:
         """The table reads ``sql.py:750`` ``_ModelBuilder.build`` — the name
         beside the citation has to be the definition it lands on."""
-        for module, line, context in _cited_lines():
+        for document, module, line, context in _cited_lines():
             name = _definitions(PACKAGE / module)[line]
             # The prose names it as `build` or `_ModelBuilder.build`.
             assert re.search(rf"\b{re.escape(name)}\b", context), (
-                f"{module}:{line} is {name!r}, but the line describing it "
-                f"names something else: {context}"
+                f"{document} says {module}:{line} is {name!r}, but the line "
+                f"describing it names something else: {context}"
             )
 
 
