@@ -141,3 +141,32 @@ class TestTheTestCountIsCurrent:
         assert claimed == {collected}, (
             f"the README says {claimed.pop()} tests; pytest collects {collected}"
         )
+
+
+class TestTheSampleOutputIsCurrent:
+    """`docs/example-output/` exists so a reviewer can read generated SQL
+    without running anything. If it drifts from what the converter actually
+    emits, it is worse than not being there."""
+
+    def test_every_sample_matches_a_freshly_generated_model(self, tmp_path) -> None:
+        from pwc2dbt.emit import write_project
+        from pwc2dbt.parse import parse_file
+
+        samples = sorted((PROJECT_ROOT / "docs" / "example-output").glob("*.sql"))
+        assert samples, "no sample output to check"
+
+        repo = parse_file(PROJECT_ROOT / "FLOWLINE_DEMO_JAFFLESHOP.xml")
+        write_project(repo, tmp_path)
+        generated = {path.name: path for path in (tmp_path / "models").rglob("*.sql")}
+
+        for sample in samples:
+            assert sample.name in generated, (
+                f"{sample.name} is kept as sample output but the converter no "
+                "longer produces a model by that name"
+            )
+            assert sample.read_text(encoding="utf-8") == generated[
+                sample.name
+            ].read_text(encoding="utf-8"), (
+                f"docs/example-output/{sample.name} is stale; regenerate it "
+                "from the converter's output"
+            )
