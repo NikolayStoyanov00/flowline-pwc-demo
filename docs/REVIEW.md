@@ -70,7 +70,7 @@ python scripts/compare_reference.py
 
 Clones dbt's project, runs it on the same seeds, diffs every overlapping model.
 3 identical, 4 differing only on the crossed cents/dollars columns, 2 on row
-count from the join. **Every difference is one of the two quirks in the
+count from the join. **Every difference is one of the quirks in the
 README.** This is the strongest check available, because the reference is not
 mine.
 
@@ -112,7 +112,7 @@ FAILED ...test_master_outer_join_leads_with_the_detail_table
 FAILED ...test_customers_without_orders_are_dropped
 FAILED ...test_orders_without_items_are_dropped
 FAILED ...test_every_table_matches_cell_for_cell
-FAILED ...test_the_literal_reading_would_disagree
+FAILED ...test_correcting_the_mapping_would_change_three_tables
 ```
 
 Five failures across three independent layers — the SQL text, the row counts,
@@ -208,6 +208,7 @@ python -m pwc2dbt expressions FLOWLINE_DEMO_JAFFLESHOP.xml      # all 205 expres
 - Why can't columns be matched by name between steps?
 - Why does `customers` have 168 rows?
 - What makes `v_ORDER_SEQUENCE` untranslatable as an expression?
+- Why does `customer_order_number` reach 2967 rather than 37?
 - Why are Sorters dropped, and which one isn't?
 - What does `pwc2dbt compare` prove, and what does it not?
 

@@ -356,6 +356,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="directory of seed CSVs to copy in (default: seeds/jaffle)",
     )
 
+    convert.add_argument(
+        "--variable-order",
+        choices=VariableOrder.ALL,
+        default=VariableOrder.DOCUMENT,
+        help="how to read local variable evaluation order. 'document' (the default) follows the order the ports are declared in, which is what Informatica documents; in this export that makes a counter never restart, because the mapping assigns the previous-row variable before the test that reads it. 'deferred' instead treats such a variable as holding the previous row, which corrects the mapping. See README quirk 3",
+    )
+
     compare_cmd = command(
         "compare", "run the mapping row by row and diff the result against dbt's"
     )
@@ -373,8 +380,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     compare_cmd.add_argument(
         "--variable-order",
-        choices=[VariableOrder.DEFERRED, VariableOrder.DOCUMENT],
-        default=VariableOrder.DEFERRED,
+        choices=VariableOrder.ALL,
+        default=VariableOrder.DOCUMENT,
         help=(
             "how to read local variable evaluation order: 'deferred' treats a "
             "remember-the-previous-row variable as holding the previous row "
@@ -404,7 +411,9 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "convert":
         seeds = args.seeds if args.seeds and args.seeds.is_dir() else None
         try:
-            result = write_project(repo, args.out, seeds)
+            result = write_project(
+                repo, args.out, seeds, args.variable_order
+            )
         except (SqlError, GraphError, ExpressionError) as exc:
             # GraphError comes from planning and ExpressionError from reading
             # variable ports before SQL generation starts; both are about the

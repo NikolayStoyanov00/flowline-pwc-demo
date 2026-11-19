@@ -28,6 +28,7 @@ __all__ = [
     "translate",
     "parse_expression",
     "order_variable_ports",
+    "VariableOrder",
     "stateful_variable_ports",
     "references",
     "date_mask_to_strftime",
@@ -732,6 +733,34 @@ def references(node: Node) -> set[str]:
     if isinstance(node, Call):
         return set().union(*(references(a) for a in node.arguments)) if node.arguments else set()
     return set()
+
+
+class VariableOrder:
+    """How to order the evaluation of local variable ports.
+
+    Informatica's Transformation Guide ("Port order") states that *"the
+    display order for variable ports is the same as the order in which the
+    Integration Service evaluates each variable"*, and the export writes
+    ports in display order. So ``DOCUMENT`` is the documented reading and the
+    default.
+
+    It matters because this mapping assigns ``v_PREV_CUSTOMER_ID =
+    CUSTOMER_ID`` *before* the port that compares against it, which means the
+    comparison tests a row against itself. See the README, quirk 3.
+    """
+
+    #: As the XML declares them: the documented reading. A variable assigned
+    #: a bare column is updated before anything reads it, so by the time a
+    #: later port reads it, it holds the *current* row.
+    DOCUMENT = "document"
+
+    #: Treat such a variable as holding the *previous* row, which is the
+    #: pattern the mapping was evidently reaching for. Corrects the mapping
+    #: rather than reproducing it, so it is opt-in.
+    DEFERRED = "deferred"
+
+    #: Both, for the comparison command.
+    ALL = (DOCUMENT, DEFERRED)
 
 
 def stateful_variable_ports(ports: Iterable[Port]) -> tuple[Port, ...]:

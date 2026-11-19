@@ -186,28 +186,44 @@ class TestMasterOuterJoinDropsRows:
 
 
 class TestRowNumberCounter:
-    def test_the_counter_restarts_for_each_customer(self, built) -> None:
-        """If the partition were missing, the numbering would run across the
-        whole table instead of per customer."""
-        connection, _, _ = built
-        mismatches = connection.execute(
-            "select count(*) from ("
-            "  select customer_id, max(customer_order_number) as highest, "
-            "         count(*) as orders"
-            "  from orders group by customer_id"
-            ") where highest <> orders"
-        ).fetchone()[0]
-        assert mismatches == 0
+    """CUSTOMER_ORDER_NUMBER reproduces the mapping's bug, and the numbers
+    prove which of the two readings was emitted. See README quirk 3."""
 
-    def test_the_numbering_has_no_gaps_or_repeats(self, built) -> None:
+    def test_the_counter_never_restarts(self, built) -> None:
+        """The mapping sets v_PREV_CUSTOMER_ID before the test that reads it,
+        so the test is always true and the counter runs across the whole
+        table. The highest value is therefore the row count, not the busiest
+        customer's order count."""
         connection, _, _ = built
-        repeats = connection.execute(
-            "select count(*) from ("
-            "  select customer_id, customer_order_number, count(*) as n"
-            "  from orders group by 1, 2"
-            ") where n > 1"
+        highest, rows = connection.execute(
+            "select max(customer_order_number), count(*) from orders"
+        ).fetchone()
+        assert highest == rows
+
+        busiest = connection.execute(
+            "select max(n) from (select count(*) as n from orders group by customer_id)"
         ).fetchone()[0]
-        assert repeats == 0
+        # The corrected reading would top out here instead.
+        assert busiest < rows
+
+    def test_every_order_gets_a_distinct_number(self, built) -> None:
+        """A global sequence, so the numbers are unique table-wide rather
+        than unique per customer."""
+        connection, _, _ = built
+        distinct, rows = connection.execute(
+            "select count(distinct customer_order_number), count(*) from orders"
+        ).fetchone()
+        assert distinct == rows
+
+    def test_the_first_customer_flag_is_always_zero(self, built) -> None:
+        """EXP_MARK_FIRST_CUSTOMER compares three columns against variables
+        that already hold this row's values, so the test cannot fail and the
+        flag never fires."""
+        connection, _, _ = built
+        flagged = connection.execute(
+            "select count(*) from store_daily_kpis where unique_customers <> 0"
+        ).fetchone()[0]
+        assert flagged == 0
 
 
 class TestRouterAndUnionRoundTrip:
@@ -298,13 +314,12 @@ class TestAgainstTheReferenceImplementation:
     """
 
     def test_every_table_matches_cell_for_cell(self, repo, built) -> None:
+        # No variable_order: both sides take their default, so this breaks if
+        # the converter and the reference ever drift apart on the reading.
         from pwc2dbt.reference.compare import compare
-        from pwc2dbt.reference.simulate import VariableOrder
 
         _, _, database = built
-        comparison = compare(
-            repo, SEEDS, database, variable_order=VariableOrder.DEFERRED
-        )
+        comparison = compare(repo, SEEDS, database)
         differing = {
             diff.name: dict(diff.mismatched) or diff.note
             for diff in comparison.differing
@@ -312,18 +327,21 @@ class TestAgainstTheReferenceImplementation:
         assert differing == {}
         assert len(comparison.matched) == 16
 
-    def test_the_literal_reading_would_disagree(self, repo, built) -> None:
-        """What the unresolved question costs, measured.
+    def test_correcting_the_mapping_would_change_three_tables(
+        self, repo, built
+    ) -> None:
+        """What the quirk costs, measured.
 
-        Taking the XML's variable order literally changes three tables, so the
-        choice is not cosmetic.
+        The converter reproduces the mapping's variable order. Correcting it
+        (``--variable-order deferred``) changes three tables, so reproducing
+        it is a real choice rather than a cosmetic one.
         """
         from pwc2dbt.reference.compare import compare
         from pwc2dbt.reference.simulate import VariableOrder
 
         _, _, database = built
         comparison = compare(
-            repo, SEEDS, database, variable_order=VariableOrder.DOCUMENT
+            repo, SEEDS, database, variable_order=VariableOrder.DEFERRED
         )
         assert {diff.name for diff in comparison.differing} == {
             "ORDERS",

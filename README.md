@@ -29,7 +29,7 @@ cd dbt/jaffle_converted && dbt build          # PASS=56 ERROR=0
 | `dbt docs generate && dbt docs serve` | the lineage DAG, `localhost:8080` |
 | `python scripts/browse.py` | the data, `localhost:4213` |
 | `python scripts/compare_reference.py` | diff against dbt's real jaffle shop |
-| `pytest` | 267 tests, about a minute |
+| `pytest` | 270 tests, about a minute |
 
 Three commands show the converter's reasoning rather than just doing the work —
 the quickest way to judge it without reading Python:
@@ -67,7 +67,7 @@ of the docs.
 ## What I assumed, and what I chose not to handle
 
 **Faithful over corrected.** Where the mapping does something odd, the converter
-reproduces it and says so. Two cases, both confirmed by the reference project:
+reproduces it and says so. Three cases:
 
 - **Cents and dollars are crossed in 8 columns.** `EXP_PRODUCTS` and
   `EXP_ORDERS` each compute a dollars column and a cents column, and the
@@ -79,6 +79,19 @@ reproduces it and says so. Two cases, both confirmed by the reference project:
   with customers as master, so customers with no orders are discarded: 935
   seeded, 168 in the mart. The downstream `IIF(ISNULL(LIFETIME_ORDERS), 0, ...)`
   guard can never fire, which suggests `Detail Outer Join` was meant.
+- **The per-customer order counter never restarts.** `EXP_CUSTOMER_ORDER_NUM`
+  assigns `v_PREV_CUSTOMER_ID = CUSTOMER_ID` *before* the port that tests
+  `v_PREV_CUSTOMER_ID = CUSTOMER_ID`, so the test compares a row to itself and
+  is always true. Informatica evaluates variable ports in display order
+  ([Transformation Guide → Port order][po]) and the export writes them in that
+  order, so this is what the mapping does: `customer_order_number` counts
+  1…2967 straight through instead of restarting per customer, and
+  `unique_customers` is 0 on every row. The canonical pattern puts the
+  `v_PREV = X` assignment *after* the comparison. `--variable-order deferred`
+  emits the intended reading, which changes 3 tables — not the default,
+  because correcting this one while reproducing the other two would be
+  inconsistent, and a converter that silently repairs a mapping is the more
+  dangerous tool.
 
 Other assumptions:
 
@@ -106,11 +119,12 @@ functions used; anything else raises.
    recorded only as a `/MASTER` suffix on a port type. Verified against
    [Informatica's docs][mo]. Get it wrong and the output still builds and looks
    fine.
-2. **Variable evaluation order.** Whether XML order is evaluation order cannot
-   be settled without PowerCenter. The converter treats a remembered variable as
-   holding the *previous* row (`lag()`); reading the XML literally instead
-   changes 3 tables and makes `UNIQUE_CUSTOMERS` 0 everywhere. Measured, not
-   guessed: `pwc2dbt compare --variable-order document`.
+2. **Variable evaluation order** rests on the export writing ports in display
+   order. The docs tie display order to evaluation order, and this export lays
+   its ports out exactly as they prescribe (inputs, then variables, then
+   outputs), but I cannot prove the exporter preserves it. If it does not,
+   the third quirk is not a quirk. Measured either way:
+   `pwc2dbt compare --variable-order deferred`.
 3. **Two interpretations rather than translations.** A self-referencing counter
    becomes `row_number()`, a remembered variable becomes `lag()`. Both matches
    are narrow and both are noted in the generated SQL; a running *total* is
@@ -118,14 +132,27 @@ functions used; anything else raises.
 4. **`TRUNC` on a number.** Informatica uses one name for date and number
    truncation. Every use here is a date, so the date reading is taken.
 5. **Precision and scale** below the source cast are discarded.
-6. **`emit._carried_through` fails open** — a column it cannot trace silently
+6. **`DATE_DIFF` counts boundaries, not fractions.** Informatica returns a
+   fractional difference (1.25 days); the emitted `date_diff` counts crossings,
+   so 23:59 → 00:01 is a whole day. Both uses here `TRUNC` both sides, where
+   the two agree — but the reference implementation does it Informatica's way,
+   so on untruncated input they would disagree.
+7. **`sql.sort_order_for` matches sort keys by name** — the one place the
+   "follow columns, never match names" rule is broken. It resolves a Sorter's
+   port names against the downstream Expression's input names, so a connector
+   renaming a sort key would pick the wrong column or fail. It also takes the
+   nearest Sorter on any branch, which behind a Joiner can be the sort on the
+   *other* input, and does not stop at a step that destroys row order. Nothing
+   in this export renames a sort key.
+8. **`emit._carried_through` fails open** — a column it cannot trace silently
    drops a dbt test instead of complaining.
-7. **The 5 enriched marts** have no reference to compare against.
+9. **The 5 enriched marts** have no reference to compare against.
 
-Next things I would fix: 5 and 6, then emit local variables as CTEs instead of
-inlining them.
+Next things I would fix: 7, then 5 and 8, then emit local variables as CTEs
+instead of inlining them.
 
 [mo]: https://docs.informatica.com/data-integration/powercenter/10-5/transformation-guide/joiner-transformation/defining-the-join-type/master-outer-join.html
+[po]: https://docs.informatica.com/data-integration/powercenter/10-5/transformation-guide/working-with-transformations/local-variables/guidelines-for-configuring-variable-ports/port-order.html
 
 ---
 
@@ -183,7 +210,7 @@ Email addresses and home paths are redacted.
 ```
 FLOWLINE_DEMO_JAFFLESHOP.xml   the input, unchanged
 src/pwc2dbt/                   the converter; reference/ is the cross-check
-tests/                         267 tests
+tests/                         270 tests
 scripts/                       browse.py, compare_reference.py
 seeds/jaffle/                  3,000-order subset of dbt's jaffle shop seeds
 docs/                          REVIEW.md, concepts.md, example-output/, agent-transcript/

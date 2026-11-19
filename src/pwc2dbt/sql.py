@@ -21,6 +21,7 @@ from .expressions import (
     ExpressionError,
     Number,
     Reference,
+    VariableOrder,
     order_variable_ports,
     parse_expression,
     references,
@@ -69,10 +70,12 @@ class _ModelBuilder:
         mapping: Mapping,
         graph: Graph,
         plan: ModelPlan,
+        variable_order: str = VariableOrder.DOCUMENT,
     ) -> None:
         self.mapping = mapping
         self.graph = graph
         self.plan = plan
+        self.variable_order = variable_order
         self.reads = {read.instance_name: read for read in plan.reads}
         # $$ variable datatypes, so a date variable is emitted quoted and cast.
         self.parameters = {v.name: v.datatype for v in mapping.variables}
@@ -213,7 +216,11 @@ class _ModelBuilder:
         """
         resolved: dict[str, str] = {}
         stateful = stateful_variable_ports(transformation.ports)
-        remembered = _remembered_ports(transformation)
+        remembered = (
+            _remembered_ports(transformation)
+            if self.variable_order == VariableOrder.DEFERRED
+            else frozenset()
+        )
         for port in order_variable_ports(
             transformation.ports, allow_stateful=bool(stateful)
         ):
@@ -311,7 +318,9 @@ class _ModelBuilder:
             f"{transformation.name}.{port.name} was a variable holding its own "
             f"previous value; translated as row_number()"
         )
-        over = f"partition by {partition_sql} order by {order_sql}"
+        over = f"order by {order_sql}"
+        if partition_sql:
+            over = f"partition by {partition_sql} {over}"
         return f"row_number() over ({over})"
 
     def counter_partition_keys(
@@ -336,6 +345,18 @@ class _ModelBuilder:
             )
 
         previous = _bare_reference_ports(transformation)
+
+        if self.variable_order == VariableOrder.DOCUMENT:
+            # v_PREV_X was assigned X earlier in this same row, so
+            # "v_PREV_X = X" compares the row to itself and is always true.
+            # The counter therefore never restarts.
+            self.notes.append(
+                f"{transformation.name}.{port.name} restarts on nothing: "
+                f"{', '.join(sorted(previous))} "
+                "is assigned before the test that reads it, so the test is "
+                "always true (see README quirk 3)"
+            )
+            return ()
 
         keys: list[str] = []
         for left, right in _equalities(tree.arguments[0]):
@@ -921,12 +942,16 @@ def _select(
     return "\n".join(lines)
 
 
-def build_model_sql(repo: Repository, plan: ModelPlan) -> str:
+def build_model_sql(
+    repo: Repository,
+    plan: ModelPlan,
+    variable_order: str = VariableOrder.DOCUMENT,
+) -> str:
     """Generate the SQL for one dbt model."""
     mapping = repo.mapping(plan.mapping_name)
     if mapping is None:
         raise SqlError(f"no mapping called {plan.mapping_name!r}")
-    builder = _ModelBuilder(mapping, build_graph(mapping), plan)
+    builder = _ModelBuilder(mapping, build_graph(mapping), plan, variable_order)
     try:
         return builder.build()
     except ExpressionError as exc:
