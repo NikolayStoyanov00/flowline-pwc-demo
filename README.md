@@ -13,11 +13,11 @@ translates each step it passes.
 
 ## How to run it
 
-Python 3.12+. No warehouse, no accounts.
+Python 3.12+, on macOS, Linux or Windows. No warehouse, no accounts.
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate                 # Windows;  source .venv/bin/activate elsewhere
+python3 -m venv .venv                  # "python" on Windows
+source .venv/bin/activate              # .venv\Scripts\activate on Windows
 pip install -e ".[dev,dbt]"
 
 python -m pwc2dbt convert FLOWLINE_DEMO_JAFFLESHOP.xml --out dbt/jaffle_converted

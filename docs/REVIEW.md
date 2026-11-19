@@ -19,8 +19,8 @@ confidence-per-minute:
 ## Setup
 
 ```bash
-python -m venv .venv
-.venv\Scripts\activate            # Windows;  source .venv/bin/activate elsewhere
+python3 -m venv .venv             # "python" on Windows
+source .venv/bin/activate         # .venv\Scripts\activate on Windows
 pip install -e ".[dev,dbt]"
 
 python -m pwc2dbt convert FLOWLINE_DEMO_JAFFLESHOP.xml --out dbt/jaffle_converted
@@ -158,20 +158,22 @@ Then set these breakpoints and debug it.
 | `sql.py:700` `_ModelBuilder.build` | step into each `emit_*` in turn |
 | `sql.py:98` `register` | watch `self.columns` fill up — this is the core |
 
-**VS Code:** configurations are committed in `.vscode/launch.json`. Open Run and
-Debug (`Ctrl+Shift+D`), pick **"convert: minimal.xml (start here)"**, press F5.
-If the interpreter is wrong, `Ctrl+Shift+P` → *Python: Select Interpreter* →
-`.venv\Scripts\python.exe`.
+Both IDEs have committed configurations, so open the **repo itself** as the
+project — not a parent folder, or the interpreter will be the system Python and
+`pwc2dbt` will not import.
 
-**PyCharm:** Run → Edit Configurations → `+` → Python, then set
+**VS Code:** Run and Debug (`Ctrl+Shift+D`) → **"convert: minimal.xml (start
+here)"** → F5. If the interpreter is wrong, `Ctrl+Shift+P` → *Python: Select
+Interpreter* → the one in `.venv`.
 
-- **Module name** (switch from *Script path* using the dropdown): `pwc2dbt`
-- **Parameters**: `convert tests/fixtures/minimal.xml --out .debug-out`
-- **Working directory**: the repo root
-- **Interpreter**: `.venv\Scripts\python.exe` (Settings → Project → Python
-  Interpreter → Add → Existing if it is not listed)
+**PyCharm:** the same four configurations are in the run dropdown. They use the
+project interpreter, which PyCharm detects from `.venv` on open; set it under
+Settings → Project → Python Interpreter if it has not.
 
-Then Run → Debug.
+To build one by hand: Run → Edit Configurations → `+` → Python, switch *Script
+path* to **Module name** (the dropdown is easy to miss), module `pwc2dbt`,
+parameters `convert tests/fixtures/minimal.xml --out .debug-out`, working
+directory the repo root.
 
 That third one is the core of the project. `self.columns` is the
 `(step, port) → (CTE, column)` lookup; watching it grow as each CTE is emitted
