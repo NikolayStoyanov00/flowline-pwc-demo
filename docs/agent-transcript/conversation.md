@@ -3397,3 +3397,364 @@ Clear structure. Let me check the existing format and what the other session fil
 ## Claude
 
 `43ed03a7` is the exercise session. Let me write a reproducible generator:
+
+## Claude
+
+Clean — the username is redacted. Let me update the README to point at the generator:
+
+## Claude
+
+278 now (the 8 doc guards). Two problems: `main`'s README still says "two quirks", and my count guard was too loose to catch 270→278. Let me fix both properly:
+
+## Claude
+
+The guard now catches it — README says 270, pytest collects 278:
+
+## Claude
+
+Done. **278 tests pass**, everything pushed to `main`.
+
+## First — a merge problem you should know about
+
+**PR #9 never reached `main`.** You merged both, but #8 landed ~30 seconds before #9, and GitHub hadn't retargeted the stacked PR in that window — so #9 merged into `review-fixes` instead. GitHub reported both as "MERGED" while `main` had none of the variable-order work. I merged `review-fixes` into `main` and verified (`grep VariableOrder src/pwc2dbt/sql.py` → present, 278 tests green).
+
+Worth remembering for stacked PRs: give GitHub a moment between merges, or re-check the base.
+
+## The docs had rotted, and in the worst way
+
+`docs/REVIEW.md` walks a reviewer through the code by file and line. **Every breakpoint it cited pointed into the wrong function:**
+
+| Cited | Actually |
+|---|---|
+| `sql.py:700` `_ModelBuilder.build` | 750 |
+| `sql.py:98` `register` | 99 |
+| `parse.py:230` `_parse_mapping` | 239 |
+| `graph.py:306` `_plan` | 311 |
+
+Plus module line counts up to 125 out, and `~5,000 lines` when it's ~5,400. A reviewer following those into the wrong place has no way to tell it's the *document* that's wrong rather than their own understanding — which is the most damaging kind of doc bug for this submission.
+
+Fixed, and now guarded: `tests/test_docs.py` asserts each cited line starts a definition, the name beside it matches what's there, every named test exists, and the README's count matches pytest. I proved the guard works by nudging one citation by a single line — it failed with `sends a reviewer to sql.py:751… Nearest above: 750`.
+
+That guard immediately caught something I'd missed: the README said 270 tests while the suite was at 278. My first version of the check was too loose to see it (it counted `def test_` and missed parametrised cases), so I made it read pytest's own collection.
+
+## The transcript
+
+It stopped at **prompt 12** while the work ran to **33** — because it had been written by hand. It's now generated:
+
+```
+python scripts/export_transcript.py
+  33 prompts, 343 agent replies
+  redaction checked: no email addresses or home paths
+```
+
+The script **exits non-zero if redaction fails**, so your email and home paths can't leak on a regeneration. I verified: no `nstoyanov00`, no `<home> — home paths appear as `<home>`.
+
+Also fixed: the README still said "two quirks" after the third was added.
+
+**One judgement call to flag:** I pushed this straight to `main` rather than opening a PR. Given the merge tangle above I thought another stacked PR was the wrong move, but say the word and I'll use PRs for anything further.
+
+## Nikolay
+
+okay perfect, anything else we need to do before submission?
+
+## Claude
+
+Let me actually audit rather than guess — starting with the thing an interviewer will do first.
+
+## Claude
+
+Clean. Now the real test — a fresh clone with a fresh venv, exactly as an interviewer would:
+
+## Claude
+
+Fresh clone works end to end. Let me verify the headline evidence command too — it needs network:
+
+## Claude
+
+Everything works from a clean clone, including the network-dependent reference diff. Now let me check the README against the actual brief:
+
+## Claude
+
+All six requirements map 1:1 to README headings. Now checking things that could have gone stale:
+
+## Claude
+
+Current. Let me add a guard for that too — it's the same failure mode that just bit us:
+
+## Claude
+
+The guard fired on itself — I added a test, so the count moved. That's it working:
+
+## Claude
+
+The opening still says "two deliberate quirks". Fixing:
+
+## Claude
+
+Audited rather than eyeballed. **It's submission-ready** — but I found two things only you can decide on.
+
+## I tested it the way an interviewer will
+
+Fresh `git clone` into a clean directory, brand-new venv, following the README literally:
+
+| Step | Result |
+|---|---|
+| `pip install -e ".[dev,dbt]"` | clean, exit 0 |
+| `pytest` | **279 passed** |
+| `convert` | 45 files, 18 models, 10 tests |
+| `dbt build` | **PASS=56 WARN=0 ERROR=0** |
+| `pwc2dbt compare` | **16 of 16** tables matched |
+| `plan` / `expressions` | 205 expressions, **0 failed** |
+| `scripts/compare_reference.py` | cloned dbt's jaffle shop, diffed — matches the README exactly |
+
+Nothing needed fixing to make that work.
+
+**The brief's six requirements map 1:1 to README headings** — I checked against the pasted brief in the transcript, including "if your tool can export the full agent conversation, include it as a file" (`conversation.md` ✓).
+
+## Fixed while auditing
+
+- **README opening still said "two deliberate quirks"** — now three, and reworded: they're the mapping's quirks, reproduced on purpose.
+- **Added a guard** that `docs/example-output/` matches what the converter emits. Those three samples are a reviewer's no-setup way to read the output, so stale ones would be worse than none — and the variable-order change could have silently invalidated them. (They were fine; now it can't go unnoticed.)
+
+Also verified: no secrets ever committed (the one `profiles.yml` in history is a DuckDB file path, no credentials), no TODO/FIXME left, repo is public, `.gitignore` correct, 52 tracked files.
+
+## Two things for you
+
+**1. Nine merged branches are still on the remote** — `phase-1-xml-parser`, `phase-2-graph`, `review-fixes`, `faithful-variable-order`, and five more. All fully merged into `main`, so deleting loses nothing, but a reviewer opening the repo sees ten branches. I haven't touched them since deletion is irreversible — want me to clean them up?
+
+**2. Your repo description is wrong.** GitHub currently shows:
+
+> *"Local working copy of the Flowline PowerCenter Jaffle Shop demo export"*
+
+That's inherited from the repo we cloned — it describes the *input*, not your submission. It's the first thing a reviewer reads. Suggested replacement:
+
+> *"Converts an Informatica PowerCenter mapping export into a runnable dbt project"*
+
+Say the word on either and I'll do it.
+
+## Nikolay
+
+do it
+
+## Claude
+
+Recording each branch's SHA first, so any of them can be restored if needed:
+
+## Claude
+
+Both done, and verified nothing was lost.
+
+## Branches
+
+Nine deleted. I re-checked each was an ancestor of `main` immediately before deleting, and confirmed afterwards that **every one of those commits is still reachable from `main`** — the full phase-by-phase history is intact in the log, just without the dangling refs.
+
+The repo now shows **one branch: `main`**.
+
+If you ever want one back, the SHAs are recorded above — `git branch <name> <sha>` restores it (they survive locally for a while, and are in `main`'s history regardless).
+
+## Description
+
+```
+Converts an Informatica PowerCenter mapping export into a runnable dbt project
+```
+
+Public, 279 tests green, `main` at `f5029a4`.
+
+## Where that leaves the submission
+
+Everything in the brief is covered and verified from a clean clone — install, convert, `dbt build` (PASS=56 ERROR=0), the reference cross-check (16/16), and the diff against dbt's real jaffle shop. The README maps 1:1 to the six required sections, and the transcript is generated rather than hand-written so it can't fall behind.
+
+The one thing I'd suggest doing yourself before sending it: **run the debugger walkthrough in `docs/REVIEW.md` once.** The breakpoints are now verified to land on the right functions, and that document is the path you'd want to have walked if they ask you to explain a part of the code live. `tests/fixtures/minimal.xml` exists exactly for that — one source, four steps, ten connectors, small enough to hold in your head.
+
+## Nikolay
+
+are there any things which we shouldn't include in the repo and the submission? just asking
+
+## Claude
+
+Audited the 52 tracked files. Short answer: **nothing that must come out** — but one stale file to fix.
+
+## Checked clean
+
+| | |
+|---|---|
+| Secrets, tokens, keys | none |
+| Email addresses, home paths | none (the transcript redaction held) |
+| `.venv`, caches, `dbt/`, `.debug-out`, `.reference` | all gitignored, not tracked |
+| Transcript tone | nothing embarrassing — the strongest word in it is your own "anything stupid we did" |
+
+**The input XML is fine to publish.** The brief points at `github.com/infinitelambda/flowline-pwc-demo` — it's their own public repo, so you're not exposing their material. And the brief explicitly permits a public repo.
+
+## One thing to fix
+
+`.vscode/launch.json` still has the **old, wrong** breakpoint lines in its header comment:
+
+```
+//   parse.py:230   _parse_mapping     ← actually line 239
+//   graph.py:306   _plan              ← actually 311
+//   sql.py:700     _ModelBuilder.build ← actually 750
+//   sql.py:98      register           ← actually 99
+```
+
+I corrected these in `docs/REVIEW.md` and guarded them with a test, but the test only reads `REVIEW.md` — `launch.json` was missed. A VS Code reviewer setting those breakpoints lands mid-function in the wrong place, which is exactly the failure that test exists to prevent.
+
+## Two judgment calls, both defensible as-is
+
+- **`.idea/` and `.vscode/` committed.** Unusual for a repo, but deliberate here — they're the debugger walkthrough, documented in `REVIEW.md`, and machine-specific paths were already stripped. I'd keep them; they support the "I can explain any part of this" requirement.
+- **No LICENSE.** Not required for a take-home. The jaffle seeds are dbt-labs' (Apache-2.0) and already attributed in the README's file tree.
+
+The public/private choice is yours — public is allowed, the only downside is that a future candidate could find it.
+
+Want me to fix `launch.json` and extend `test_docs.py` to cover it too? It's a two-line change plus a guard.
+
+## Nikolay
+
+yes fix it and push
+
+## Claude
+
+Fixed and pushed — `main` is at `adb42b0`.
+
+## What changed
+
+**`.vscode/launch.json`** — the four breakpoint lines now match the code (`parse.py:239`, `graph.py:311`, `sql.py:750`, `sql.py:99`).
+
+**`tests/test_docs.py`** — the guard now reads *both* documents instead of only `REVIEW.md`:
+
+```python
+BREAKPOINT_DOCS = (REVIEW, LAUNCH)
+CITATION = re.compile(r"(?P<module>[a-z_]+\.py):(?P<line>\d+)")
+```
+
+Backticks are now optional in the pattern, because `REVIEW.md` writes `` `sql.py:750` `` in a table and `launch.json` writes it bare in a comment. Each citation is parametrised, so a drifted line fails as its own named test and the message says which document is wrong.
+
+I also added `test_both_documents_still_cite_breakpoints`, which asserts each document contributes at least one citation — so if either table is reworded away, the suite tells you the guard has gone blind rather than passing vacuously.
+
+## Verified
+
+- **283 tests pass** (was 279 — the parametrised breakpoint check went from 4 cases to 8).
+- README test count updated in both places; its own guard confirms the figure against pytest's collection.
+
+One incidental: I added an explicit `check=False` to the `subprocess.run` in `_collected_test_count` — it deliberately tolerates a non-zero exit, and saying so silences a lint warning. Note that `ruff check .` with default rules reports 40 findings across the repo; the project has no `[tool.ruff]` config, so those defaults were never the project's gate and this isn't a regression.
+
+## Nikolay
+
+ok so from the readme, I don't like the parts: Where the converter is most likely to produce wrong output
+and What I assumed, and what I chose not to handle
+
+they are very heavy to read and in the same time don't give enough context what were the problems, what was assumed not handled etc, can you try to make those shorter and more concise, but also easy to understand with the context from just reading this in the readme file, can u try that, please do it in a PR so I can review before u push it
+
+## Claude
+
+Let me draft this on a branch.
+
+## Claude
+
+Section 1 came out longer than the original. Tightening it.
+
+## Claude
+
+Still over. Cutting words rather than just restructuring.
+
+## Claude
+
+**PR #10 is open** for review: https://github.com/NikolayStoyanov00/flowline-pwc-demo/pull/10
+
+Branch `readme-clarity`, one commit, README only. Nothing pushed to `main`.
+
+## What I changed
+
+Both sections had the same problem: they opened each item with *the decision* and left the reader to reverse-engineer *what problem forced it*.
+
+**Assumptions** — now three sub-headings instead of one flat run:
+
+- **"The one that matters: reproduce the mapping, don't fix it"** — the three quirks, each cut to ~4 lines, each leading with the observable symptom (`subtotal` holds 700; 935 customers become 168; the counter runs 1…2967).
+- **"The smaller ones"** — now a table whose left column is *the question the export doesn't answer*. That's the real fix for "doesn't give enough context": `Table or view?` → `Targets are truncate-and-insert, so marts are tables, staging views`. Before, these were bare assertions with no visible question behind them.
+- **"Not handled"** — unchanged in substance, just tightened.
+
+**Risks** — now opens with which ones matter: *"The first three would change data without anything looking broken; the rest are narrower."* Previously you had to read to item 7 before you could tell 4–9 were minor. The three big ones get a paragraph each; the other six are one-liners.
+
+## On "shorter" — straight answer
+
+**The word count is flat** (399→403 and 389→391). I tried twice to cut and both attempts came back longer, because adding the missing context costs words. Those two goals genuinely pull against each other here.
+
+What did drop is the *reading* cost: you can now skim headings and bold leads and stop when you've got what you need, instead of reading two 400-word blocks start to finish.
+
+If you want it actually shorter, the honest lever is cutting content, and the cheapest cuts are in the narrower six — `TRUNC` on a number and `DATE_DIFF` are the two least likely to matter to a reviewer. Say the word and I'll drop them.
+
+## Nikolay
+
+also dont like the Where the coding agent got it wrong, and how I caught it
+section, the other 2 are fine right now, still not perfect cuz of AI slop in some places, but good enough I think for the take-home assignment, trying to not over-invest as well.
+
+so for the Where the coding agent got it wrong, and how I caught it - section, I don't like that it's hard to read and very very specific, can we make it more easy to read in a way what the coding agent did wrong, some examples at the bottom, but in the main part of the section just say for example tests were testing the code instead of the behavior, which led to bla bla bla, you know what I mean
+
+## Claude
+
+Pushed to the same branch — **PR #10 now covers all three sections**: https://github.com/NikolayStoyanov00/flowline-pwc-demo/pull/10
+
+I kept it in one PR rather than opening a second, since it's the same file and the same readability pass. Two commits, so you can review them separately if you'd rather.
+
+## What the agent-mistakes section looks like now
+
+The lead states the general shape first, then one concrete case per kind — which is what you described:
+
+**1. The tests agreed with the code instead of checking it.** Tests asserted a function returned *something*, or compared generated SQL against a string written minutes earlier in the same session. A test like that passes whatever the code does. One asserted `A + B * C` is 13 — it's 25 — and stayed green because nothing ever ran the SQL. That's what produced the *test the behaviour, not the code* rule.
+
+**2. It guessed where the export was ambiguous.** Picked a plausible reading and moved on silently: a running *total* emitted as `row_number()`; column types left for the warehouse to infer, so DuckDB decided `PERISHABLE` was boolean and cast `'Y'` to true — 4,528 cells inverted while `dbt build` and 201 tests stayed green. That's what produced *unknown means stop* and the second implementation.
+
+**3. Valid SQL that means the wrong thing.** `{{ var('run_date') }}` unquoted. Syntactically fine, sqlglot parsed it happily, DuckDB read `2026-04-01` as arithmetic and got 2021. Only a real `dbt build` surfaced it.
+
+Then the closing line about output being what caught them, and **all seven cases in a collapsed `<details>` block** at the bottom. Nothing lost — the specifics are one click away if a reviewer wants them, instead of being the first thing they hit.
+
+The visible prose is ~336 words, roughly half of what you had to read before to get to the point.
+
+One thing worth your eye in review: the three categories are my grouping of the seven incidents, so check you'd defend that grouping in an interview — it's the kind of claim they'd probe.
+
+## Nikolay
+
+btw do we currently have integration tests right now - where we have an XML -> sql queries -> actual DB data comparison in the tests?
+
+## Claude
+
+Yes — `tests/test_end_to_end.py`, 20 tests, and they all ran (no skips).
+
+## The chain they exercise
+
+```
+FLOWLINE_DEMO_JAFFLESHOP.xml
+  → parse_file()            (the `repo` session fixture, conftest.py)
+  → write_project()         real dbt project in a tmp dir, seeded from seeds/jaffle
+  → subprocess: dbt build   fails the test if returncode != 0
+  → duckdb.connect(..., read_only=True)
+  → SQL queries asserting actual rows
+```
+
+So it's the full path, with a real `dbt build` and a real warehouse — not mocked and not string-compared.
+
+## What the assertions actually check
+
+| | |
+|---|---|
+| `ERROR=0`, `WARN=0`, all 18 tables exist | the build itself |
+| 6 staging models vs their seeds | row counts match one-to-one |
+| crossed price columns | `price == raw_price` and `price_cents == raw_price / 100`, per row |
+| `Master Outer Join` | `customers` count == distinct customers in `raw_orders`, and strictly less than seeded |
+| the counter quirk | `max(customer_order_number) == count(*)`, every value distinct, flag always 0 |
+| Router + Union round trip | nothing lost or duplicated across the three region branches |
+| `$$RUN_DATE` | two `dbt build` runs with different `--vars`, asserting recency moves by exactly 151 days |
+| **cell-for-cell** | `compare()` diffs all 16 tables against the row-by-row reference implementation — `assert differing == {}` |
+
+That last one is the strongest: it reads every cell out of DuckDB and compares it against a second implementation that shares no code with the SQL path.
+
+## Two things it does *not* do
+
+**It never compares against dbt's real jaffle shop.** That lives in `scripts/compare_reference.py` — a script you run by hand, not a test. It clones and builds the real project, so it's too slow and too network-dependent for the suite. The numbers it produces are quoted in the README but nothing asserts they stay true.
+
+**`test_sql.py` also hits DuckDB** (2 tests, lines ~490 and ~520) but with hand-built in-memory tables, not the real seeds — that's the unit-level version of the same idea.
+
+If you want the jaffle-shop comparison asserted rather than documented, that'd be a marked slow test wrapping `compare_reference.py`. Worth it only if you think a reviewer will ask "what keeps those README numbers honest?" — right now the answer is "nothing automated."
+
+## Nikolay
+
+I think this is good for now, thank you, please update the agent-transcript if necessary in latest main, I've merged the docs improvements and we should be good to submit the assignment

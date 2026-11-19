@@ -218,7 +218,7 @@ mapping a second way to see whether the two answers matched.
 
 ## The prompts I gave the agent
 
-[`docs/agent-transcript/prompts.md`](docs/agent-transcript/prompts.md) — all 33
+[`docs/agent-transcript/prompts.md`](docs/agent-transcript/prompts.md) — all 41
 instructions, in order, verbatim.
 [`conversation.md`](docs/agent-transcript/conversation.md) is the full exchange,
 agent replies included.
