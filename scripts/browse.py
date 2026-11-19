@@ -36,7 +36,9 @@ def main(argv: list[str]) -> int:
         )
         return 1
 
-    connection = duckdb.connect(str(path))
+    # Read-only: a writer excludes every other process, so an open browser
+    # would otherwise stop `compare_reference.py` from even reading the file.
+    connection = duckdb.connect(str(path), read_only=True)
     connection.execute("install ui")
     connection.execute("load ui")
 

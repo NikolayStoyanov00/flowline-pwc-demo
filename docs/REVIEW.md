@@ -19,7 +19,10 @@ confidence-per-minute:
 ## Setup
 
 ```bash
+python -m venv .venv
+.venv\Scripts\activate            # Windows;  source .venv/bin/activate elsewhere
 pip install -e ".[dev,dbt]"
+
 python -m pwc2dbt convert FLOWLINE_DEMO_JAFFLESHOP.xml --out dbt/jaffle_converted
 cd dbt/jaffle_converted && dbt build && cd ../..
 python scripts/browse.py          # the data, localhost:4213

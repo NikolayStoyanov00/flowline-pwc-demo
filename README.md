@@ -16,7 +16,10 @@ translates each step it passes.
 Python 3.12+. No warehouse, no accounts.
 
 ```bash
+python -m venv .venv
+.venv\Scripts\activate                 # Windows;  source .venv/bin/activate elsewhere
 pip install -e ".[dev,dbt]"
+
 python -m pwc2dbt convert FLOWLINE_DEMO_JAFFLESHOP.xml --out dbt/jaffle_converted
 cd dbt/jaffle_converted && dbt build          # PASS=56 ERROR=0
 ```

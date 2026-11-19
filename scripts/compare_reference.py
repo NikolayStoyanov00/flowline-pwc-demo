@@ -13,8 +13,10 @@ Needs network access the first time.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -55,18 +57,31 @@ def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess:
 
 
 def dbt() -> str | None:
-    for name in ("dbt.exe", "dbt"):
-        candidate = Path(sys.executable).parent / name
-        if candidate.is_file():
-            return str(candidate)
-    return None
+    """Find the dbt executable for the interpreter running this script.
+
+    Not simply "next to python": that holds in a virtualenv, but a system
+    Python keeps its executables in a sibling Scripts/bin directory.
+    sysconfig knows which it is.
+    """
+    scripts = Path(sysconfig.get_path("scripts"))
+    for directory in (scripts, Path(sys.executable).parent):
+        for name in ("dbt.exe", "dbt"):
+            candidate = directory / name
+            if candidate.is_file():
+                return str(candidate)
+    return shutil.which("dbt")
 
 
 def build_reference() -> Path:
     """Clone, configure and build the reference project. Returns its database."""
     executable = dbt()
     if executable is None:
-        sys.exit('dbt is not installed; pip install -e ".[dbt]"')
+        sys.exit(
+            "could not find a dbt executable for this interpreter\n"
+            f"  interpreter : {sys.executable}\n"
+            f"  looked in   : {sysconfig.get_path('scripts')}\n"
+            '  install it  : pip install -e ".[dbt]"'
+        )
 
     if not WORK.is_dir():
         print(f"cloning {REPO} ({BRANCH})")

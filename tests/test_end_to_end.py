@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sysconfig
 import sys
 from pathlib import Path
 
@@ -28,12 +29,17 @@ SEEDS = PROJECT_ROOT / "seeds" / "jaffle"
 
 
 def _dbt_executable() -> str | None:
-    candidate = Path(sys.executable).parent / "dbt.exe"
-    if candidate.is_file():
-        return str(candidate)
-    candidate = Path(sys.executable).parent / "dbt"
-    if candidate.is_file():
-        return str(candidate)
+    """The dbt executable for the interpreter running the tests.
+
+    A virtualenv puts it next to python; a system Python puts it in a sibling
+    scripts directory. Getting this wrong skips every end-to-end test silently.
+    """
+    scripts = Path(sysconfig.get_path("scripts"))
+    for directory in (scripts, Path(sys.executable).parent):
+        for name in ("dbt.exe", "dbt"):
+            candidate = directory / name
+            if candidate.is_file():
+                return str(candidate)
     return shutil.which("dbt")
 
 
