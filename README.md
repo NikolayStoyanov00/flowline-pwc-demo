@@ -67,90 +67,98 @@ of the docs.
 
 ## What I assumed, and what I chose not to handle
 
-**Faithful over corrected.** Where the mapping does something odd, the converter
-reproduces it and says so. Three cases:
+### The one that matters: reproduce the mapping, don't fix it
 
-- **Cents and dollars are crossed in 8 columns.** `EXP_PRODUCTS` and
-  `EXP_ORDERS` each compute a dollars column and a cents column, and the
-  connectors swap them into the target, so `subtotal` holds 700 where the
-  reference has 7.00. This is why columns are followed through connectors and
-  never matched by name — a name-matching converter would quietly swap them back
-  and look *more* correct.
-- **`customers` drops 82% of its customers.** The join is a `Master Outer Join`
-  with customers as master, so customers with no orders are discarded: 935
-  seeded, 168 in the mart. The downstream `IIF(ISNULL(LIFETIME_ORDERS), 0, ...)`
-  guard can never fire, which suggests `Detail Outer Join` was meant.
-- **The per-customer order counter never restarts.** `EXP_CUSTOMER_ORDER_NUM`
-  assigns `v_PREV_CUSTOMER_ID = CUSTOMER_ID` *before* the port that tests
-  `v_PREV_CUSTOMER_ID = CUSTOMER_ID`, so the test compares a row to itself and
-  is always true. Informatica evaluates variable ports in display order
-  ([Transformation Guide → Port order][po]) and the export writes them in that
-  order, so this is what the mapping does: `customer_order_number` counts
-  1…2967 straight through instead of restarting per customer, and
-  `unique_customers` is 0 on every row. The canonical pattern puts the
-  `v_PREV = X` assignment *after* the comparison. `--variable-order deferred`
-  emits the intended reading, which changes 3 tables — not the default,
-  because correcting this one while reproducing the other two would be
-  inconsistent, and a converter that silently repairs a mapping is the more
-  dangerous tool.
+Three things in this export look like mistakes in the *mapping*, not the
+conversion. The converter emits each as it is and flags it — a tool that
+silently repairs its input is the more dangerous one. These are the **quirks**
+referred to throughout.
 
-Other assumptions:
+**1. Cents and dollars are crossed, in 8 columns.** `EXP_PRODUCTS` and
+`EXP_ORDERS` each compute a dollars *and* a cents column; the connectors wire
+each into the other's target, so `subtotal` holds `700` where the reference has
+`7.00`. Hence columns are followed through connectors, never matched by name
+— name-matching would swap them back and look *more* correct.
 
-- Truncate-and-insert targets mean marts are tables, staging views.
-- Sorters are droppable, except where one sets the order a window function needs.
-- Target schema comes from the `TRUNCATE` statement — the only place it appears.
-- All 164 target fields are `NOT A KEY`, so dbt tests are traced forward from
-  the `RAW_*` source keys to the model column they become.
-- Source columns are cast to their declared PowerCenter types, not left to the
-  warehouse to infer.
-- **Unknown means stop**: an unrecognised function or transformation raises.
+**2. `customers` loses 82% of its rows.** A `Master Outer Join` with customers
+as master keeps every *detail* row and drops unmatched masters: 935 customers
+seeded, 168 in the mart. The `IIF(ISNULL(LIFETIME_ORDERS), 0, ...)` guard
+downstream can then never fire, which suggests `Detail Outer Join` was meant.
 
-**Not handled**, because none appears in this export: Lookup, Sequence
-Generator, Update Strategy/SCD, Normalizer, Transaction Control, mapplets,
-shortcuts, SQL overrides, multi-source Source Qualifiers, incremental loads,
-descending and distinct sorters. The translator covers the 13 expression
-functions used; anything else raises.
+**3. The per-customer order counter never restarts.**
+`EXP_CUSTOMER_ORDER_NUM` sets `v_PREV_CUSTOMER_ID = CUSTOMER_ID` in the port
+*above* the one that tests it, so the test compares a row against itself and is
+always true. Informatica evaluates variable ports in display order
+([docs][po]), so `customer_order_number` counts 1…2967 straight through and
+`unique_customers` is 0 everywhere. `--variable-order deferred` emits the
+intended reading, changing 3 tables.
+
+### The smaller ones
+
+| The export doesn't say | What I assumed |
+|---|---|
+| Table or view? | Targets are truncate-and-insert, so marts are tables, staging views |
+| Which schema a target lands in | Only its `TRUNCATE TABLE STG.X` pre-SQL names one |
+| Whether a Sorter means anything | Droppable, unless a downstream window function needs that order |
+| Which columns deserve dbt tests | All 164 target fields are `NOT A KEY`, so keys trace *forward* from the `RAW_*` sources |
+| What type a column is | Its declared PowerCenter type, cast explicitly rather than inferred |
+
+Throughout: **unknown means stop.** An unrecognised function or transformation
+raises rather than guessing.
+
+### Not handled
+
+Absent from this export, so unimplemented rather than guessed at — the
+converter raises on each: Lookup, Sequence Generator, Update Strategy/SCD,
+Normalizer, Transaction Control, mapplets, shortcuts, SQL overrides,
+multi-source Source Qualifiers, incremental loads, descending and distinct
+sorters. The translator covers the 13 expression functions this export uses.
 
 ---
 
 ## Where the converter is most likely to produce wrong output
 
-1. **Join direction.** Ten of sixteen joins are `Master Outer Join`, which keeps
-   all *detail* rows — backwards from how it reads — and master/detail is
-   recorded only as a `/MASTER` suffix on a port type. Verified against
-   [Informatica's docs][mo]. Get it wrong and the output still builds and looks
-   fine.
-2. **Variable evaluation order** rests on the export writing ports in display
-   order. The docs tie display order to evaluation order, and this export lays
-   its ports out exactly as they prescribe (inputs, then variables, then
-   outputs), but I cannot prove the exporter preserves it. If it does not,
-   the third quirk is not a quirk. Measured either way:
-   `pwc2dbt compare --variable-order deferred`.
-3. **Two interpretations rather than translations.** A self-referencing counter
-   becomes `row_number()`, a remembered variable becomes `lag()`. Both matches
-   are narrow and both are noted in the generated SQL; a running *total* is
-   refused rather than guessed at.
-4. **`TRUNC` on a number.** Informatica uses one name for date and number
-   truncation. Every use here is a date, so the date reading is taken.
-5. **Precision and scale** below the source cast are discarded.
-6. **`DATE_DIFF` counts boundaries, not fractions.** Informatica returns a
-   fractional difference (1.25 days); the emitted `date_diff` counts crossings,
-   so 23:59 → 00:01 is a whole day. Both uses here `TRUNC` both sides, where
-   the two agree — but the reference implementation does it Informatica's way,
-   so on untruncated input they would disagree.
-7. **`sql.sort_order_for` matches sort keys by name** — the one place the
-   "follow columns, never match names" rule is broken. It resolves a Sorter's
-   port names against the downstream Expression's input names, so a connector
-   renaming a sort key would pick the wrong column or fail. It also takes the
-   nearest Sorter on any branch, which behind a Joiner can be the sort on the
-   *other* input, and does not stop at a step that destroys row order. Nothing
-   in this export renames a sort key.
-8. **`emit._carried_through` fails open** — a column it cannot trace silently
-   drops a dbt test instead of complaining.
-9. **The 5 enriched marts** have no reference to compare against.
+The first three would change data without anything looking broken; the rest are
+narrower. All are decisions taken with incomplete information, not bugs I know
+about.
 
-Next things I would fix: 7, then 5 and 8, then emit local variables as CTEs
-instead of inlining them.
+**1. Join direction.** Ten of the sixteen joins are `Master Outer Join`, which
+keeps all *detail* rows — the opposite of how the name reads. Which side is
+master appears only as a `/MASTER` suffix on a port type, so one misread
+attribute silently drops or duplicates rows and the output still builds.
+Checked against [Informatica's docs][mo].
+
+**2. Variable evaluation order.** Quirk 3 rests on the exporter writing ports
+in the order Informatica evaluates them. The docs tie the two together and this
+export follows the prescribed layout, but I cannot prove the exporter always
+preserves it — if it does not, three tables are wrong.
+`pwc2dbt compare --variable-order deferred` measures the gap.
+
+**3. Two patterns are interpreted, not translated.** A self-referencing counter
+becomes `row_number()`, a variable remembering the previous row becomes
+`lag()`. Both matchers are narrow and annotate the SQL they emit, but a mapping
+that *looks* like either and means something else would be mistranslated. A
+running total is refused rather than guessed — because this went wrong once
+(next section).
+
+The narrower six, in the order I would fix them:
+
+- **`sql.sort_order_for` matches by name** — the one place the "follow
+  connectors, never match names" rule is broken. A connector that renamed a
+  sort key would pick the wrong column, and it takes the nearest Sorter on
+  *any* branch, which behind a Joiner can be the other input's. Nothing here
+  renames a sort key.
+- **Precision and scale** below the source cast are discarded.
+- **`emit._carried_through` fails open** — a column it cannot trace drops a
+  dbt test silently instead of complaining.
+- **`DATE_DIFF` counts boundaries, not fractions.** Informatica returns 1.25
+  days; the emitted `date_diff` counts crossings, so 23:59 → 00:01 is a whole
+  day. Both uses here `TRUNC` both sides, where the two agree.
+- **`TRUNC` on a number.** Informatica uses one name for date and number
+  truncation; every use here is a date, so the date reading is taken.
+- **The 5 enriched marts** have nothing independent to be checked against.
+
+After those: emit local variables as CTEs instead of inlining them.
 
 [mo]: https://docs.informatica.com/data-integration/powercenter/10-5/transformation-guide/joiner-transformation/defining-the-join-type/master-outer-join.html
 [po]: https://docs.informatica.com/data-integration/powercenter/10-5/transformation-guide/working-with-transformations/local-variables/guidelines-for-configuring-variable-ports/port-order.html
